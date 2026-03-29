@@ -1,0 +1,313 @@
+# =============================================================================
+# AWS SAM Template — M2: Order & Payment Microservices
+# =============================================================================
+# This template defines all AWS resources for M2:
+#   - 4 DynamoDB tables (Orders, SagaState, Payments, IdempotencyKeys)
+#   - 3 Lambda functions (OrderApi, OrderEvents, PaymentEvents)
+#   - EventBridge rules to route events to the correct Lambda
+#   - A Lambda layer for shared code (logger, events, exceptions)
+#   - IAM permissions for Lambda → DynamoDB and Lambda → EventBridge
+#
+# Deployment:
+#   sam build && sam deploy --guided
+#
+# M1 provides: EventBridge bus, API Gateway, Cognito, VPC, CloudFront.
+# M2 imports: EventBusName from M1's stack exports.
+# =============================================================================
+
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "M2 — Order and Payment microservices with saga orchestration"
+
+# ---------------------------------------------------------------------------
+# Parameters — configurable per environment (dev/staging/prod)
+# ---------------------------------------------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name
+
+  EventBusName:
+    Type: String
+    Default: ecommerce-event-bus
+    Description: Name of the shared EventBridge bus (created by M1)
+
+  StripeSecretKey:
+    Type: String
+    Default: sk_test_placeholder
+    NoEcho: true  # Hides the value in CloudFormation console
+    Description: Stripe API secret key
+
+# ---------------------------------------------------------------------------
+# Global settings applied to all Lambda functions
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30       # seconds — enough for Stripe calls with retries
+    MemorySize: 256   # MB — DynamoDB + Stripe calls don't need much memory
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        EVENT_BUS_NAME: !Ref EventBusName
+        POWERTOOLS_SERVICE_NAME: m2-order-payment
+
+Resources:
+  # =========================================================================
+  # Lambda Layer — Shared utilities (logger, events, exceptions)
+  # =========================================================================
+  # Both order and payment Lambdas import from the shared/ package.
+  # Packaging it as a layer avoids duplicating the code in each Lambda.
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "${Environment}-m2-shared-layer"
+      Description: "Shared utilities — logger, event publisher, exceptions"
+      ContentUri: shared/
+      CompatibleRuntimes:
+        - python3.12
+      RetentionPolicy: Delete
+
+  # =========================================================================
+  # DynamoDB Tables
+  # =========================================================================
+
+  # --- Orders Table ---
+  # Stores order records: items, totals, status, shipping address.
+  # Partition key: order_id (no sort key — we always access by order ID).
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${Environment}-orders"
+      BillingMode: PAY_PER_REQUEST  # On-demand — scales automatically, no capacity planning
+      AttributeDefinitions:
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: order_id
+          KeyType: HASH
+
+  # --- Saga State Table ---
+  # Tracks the saga's current step and transition history for each order.
+  # Separate from orders to avoid write conflicts between saga and order updates.
+  SagaStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${Environment}-saga-state"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: order_id
+          KeyType: HASH
+
+  # --- Payments Table ---
+  # Stores payment records with charge/refund info.
+  # Has a GSI on order_id so the payment service can look up payments by order.
+  PaymentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${Environment}-payments"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: payment_id
+          AttributeType: S
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: payment_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: order_id-index
+          KeySchema:
+            - AttributeName: order_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL  # Project all attributes into the index
+
+  # --- Idempotency Keys Table ---
+  # Prevents duplicate payment charges when events are retried.
+  # Has a TTL attribute so stale keys are auto-deleted after 24 hours.
+  IdempotencyKeysTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${Environment}-idempotency-keys"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: idempotency_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: idempotency_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl     # DynamoDB auto-deletes items when ttl < current time
+        Enabled: true
+
+  # =========================================================================
+  # Lambda Functions
+  # =========================================================================
+
+  # --- Order API Lambda ---
+  # Handles HTTP requests from API Gateway: create order, get order, cancel order.
+  OrderApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Environment}-order-api"
+      Handler: order_service.handler.api_handler
+      CodeUri: .
+      Layers:
+        - !Ref SharedLayer
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          SAGA_STATE_TABLE: !Ref SagaStateTable
+      Policies:
+        # Allow this Lambda to read/write the Orders and SagaState tables
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SagaStateTable
+        # Allow publishing events to EventBridge
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref EventBusName
+      Events:
+        # API Gateway routes — M1 creates the main API Gateway,
+        # but SAM can also create a simple one for standalone testing.
+        CreateOrder:
+          Type: Api
+          Properties:
+            Path: /orders
+            Method: POST
+        GetOrder:
+          Type: Api
+          Properties:
+            Path: /orders/{id}
+            Method: GET
+        CancelOrder:
+          Type: Api
+          Properties:
+            Path: /orders/{id}/cancel
+            Method: PUT
+
+  # --- Order Event Handler Lambda ---
+  # Handles EventBridge events: payment results, inventory results.
+  # Separate from the API Lambda for independent scaling and IAM scoping.
+  OrderEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Environment}-order-events"
+      Handler: order_service.handler.event_handler
+      CodeUri: .
+      Layers:
+        - !Ref SharedLayer
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          SAGA_STATE_TABLE: !Ref SagaStateTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SagaStateTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref EventBusName
+      Events:
+        # EventBridge rules -- route specific event types to this Lambda.
+        # Inventory events arrive first (inventory-first saga flow),
+        # then payment events after inventory is confirmed.
+        InventoryReserved:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "inventory.reserved"
+        InventoryFailed:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "inventory.failed"
+        PaymentCompleted:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "payment.completed"
+        PaymentFailed:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "payment.failed"
+        InventoryReleased:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "inventory.released"
+
+  # --- Payment Event Handler Lambda ---
+  # Handles EventBridge events: order.created (charge) and saga.compensate_payment (refund).
+  PaymentEventFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${Environment}-payment-events"
+      Handler: payment_service.handler.event_handler
+      CodeUri: .
+      Layers:
+        - !Ref SharedLayer
+      Environment:
+        Variables:
+          PAYMENTS_TABLE: !Ref PaymentsTable
+          IDEMPOTENCY_TABLE: !Ref IdempotencyKeysTable
+          STRIPE_SECRET_KEY: !Ref StripeSecretKey
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PaymentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyKeysTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref EventBusName
+      Events:
+        OrderReadyForPayment:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "order.ready_for_payment"
+        CompensatePayment:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - "saga.compensate_payment"
+
+# ---------------------------------------------------------------------------
+# Outputs — values other stacks (M1, M3, M4) can import
+# ---------------------------------------------------------------------------
+Outputs:
+  OrderApiUrl:
+    Description: "API Gateway URL for the order service"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+
+  OrdersTableName:
+    Description: "DynamoDB table name for orders"
+    Value: !Ref OrdersTable
+    Export:
+      Name: !Sub "${Environment}-OrdersTableName"
+
+  PaymentsTableName:
+    Description: "DynamoDB table name for payments"
+    Value: !Ref PaymentsTable
+    Export:
+      Name: !Sub "${Environment}-PaymentsTableName"
