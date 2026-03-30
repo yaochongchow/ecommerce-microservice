@@ -1,0 +1,8 @@
+# Environment variables
+.env
+
+# Go artifacts
+*.exe
+main
+*.test
+*.out
