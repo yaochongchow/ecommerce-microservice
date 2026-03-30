@@ -1,412 +1,283 @@
-# M2 Demo — Order & Payment Saga in Action
+# Demo Guide — ShopCloud E-Commerce Platform
 
-This document walks through a live demonstration of the order and payment microservices. It covers the happy path, payment failure, inventory failure with compensation (refund), idempotency, and the circuit breaker.
-
----
+Step-by-step instructions to deploy, test, and demonstrate the full platform.
 
 ## Prerequisites
 
-Before running the demo, ensure the stack is deployed:
+- [Node.js 20+](https://nodejs.org)
+- [AWS CLI v2](https://aws.amazon.com/cli/) configured with credentials
+- [AWS CDK CLI v2](https://docs.aws.amazon.com/cdk/latest/guide/cli.html)
+- [Docker](https://www.docker.com/) (for building ECS container images)
+- [Go 1.23+](https://go.dev/) (optional, for local product/cart development)
+- [Python 3.11+](https://www.python.org/) (optional, for local Lambda development)
+
+Verify setup:
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Build and deploy
-sam build && sam deploy --guided
-```
-
-After deployment, SAM outputs the API URL:
-
-```
-Outputs:
-  OrderApiUrl: https://<api-id>.execute-api.us-east-1.amazonaws.com/Prod
-```
-
-Set it as a variable for convenience:
-
-```bash
-export API_URL="https://<api-id>.execute-api.us-east-1.amazonaws.com/Prod"
+node --version            # v20+
+aws --version             # aws-cli/2.x
+cdk --version             # 2.x
+docker --version          # Docker 24+
+aws sts get-caller-identity   # confirm AWS credentials work
 ```
 
 ---
 
-## Demo 1: Happy Path — Full Order Lifecycle
-
-This shows the complete saga flow: create order → charge payment → reserve inventory → confirm order.
-
-### Step 1: Create an Order
+## 1. Install Dependencies
 
 ```bash
-curl -s -X POST "$API_URL/orders" \
+cd ecommerce-microservice
+npm install
+```
+
+---
+
+## 2. Bootstrap CDK (First Time Only)
+
+```bash
+npx cdk bootstrap
+```
+
+---
+
+## 3. Build
+
+```bash
+npm run build
+```
+
+This compiles all TypeScript CDK stacks. Fix any errors before deploying.
+
+---
+
+## 4. Synthesize (Optional — Validates Templates)
+
+```bash
+npx cdk synth
+```
+
+Generates CloudFormation templates without deploying. Good for catching issues early.
+
+---
+
+## 5. Deploy
+
+### Deploy All Stacks
+
+```bash
+npx cdk deploy --all --require-approval never
+```
+
+This deploys 7 stacks in dependency order:
+
+1. **SharedStack** — EventBridge bus, SSM params
+2. **OrderPaymentStack** — Order + Payment Lambdas, DynamoDB tables, SQS queues
+3. **ProductCartStack** — VPC, ECS cluster, ALB, Fargate services
+4. **PlatformStack** — Cognito, API Gateway, CloudFront, BFF, User service
+5. **InventoryStack** — Inventory Lambda, DynamoDB tables, SQS queues
+6. **ShippingStack** — Shipping Lambda, DynamoDB tables, SQS queues
+7. **NotificationStack** — Notification Lambda, SQS queues
+
+### Deploy Without ECS (Faster, No Docker Required)
+
+If you want to skip the Product/Cart ECS services (which take longer and require Docker):
+
+```bash
+npx cdk deploy SharedStack OrderPaymentStack PlatformStack InventoryStack ShippingStack NotificationStack
+```
+
+The BFF will use its built-in demo product catalog as a fallback.
+
+---
+
+## 6. Note the Outputs
+
+After deployment, CDK prints outputs like:
+
+```
+PlatformStack.ApiUrl           = https://abc123.execute-api.us-east-1.amazonaws.com
+PlatformStack.CloudFrontDomain = https://d1234abcd.cloudfront.net
+PlatformStack.UserPoolId       = us-east-1_XXXXXXX
+PlatformStack.UserPoolClientId = xxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Save these — you'll need them for testing.
+
+---
+
+## 7. Configure the Frontend
+
+Open `frontend/index.html` and update the `CONFIG` block with your CDK output values:
+
+```js
+const CONFIG = {
+  apiUrl:     "https://abc123.execute-api.us-east-1.amazonaws.com",
+  userPoolId: "us-east-1_XXXXXXX",
+  clientId:   "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+  region:     "us-east-1",
+};
+```
+
+Then redeploy the platform stack to push the updated frontend:
+
+```bash
+npx cdk deploy PlatformStack
+```
+
+---
+
+## 8. Create Test Users
+
+```bash
+USER_POOL_ID=$(aws cloudformation describe-stacks \
+  --stack-name PlatformStack \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+  --output text)
+
+# Create Alice
+aws cognito-idp admin-create-user \
+  --user-pool-id $USER_POOL_ID \
+  --username alice@shopcloud.dev \
+  --user-attributes Name=email,Value=alice@shopcloud.dev Name=given_name,Value=Alice Name=family_name,Value=Johnson Name=email_verified,Value=true \
+  --temporary-password "Temp1234!" --message-action SUPPRESS
+
+aws cognito-idp admin-set-user-password \
+  --user-pool-id $USER_POOL_ID --username alice@shopcloud.dev \
+  --password "Alice1234!" --permanent
+```
+
+| Name | Email | Password |
+|------|-------|----------|
+| Alice Johnson | alice@shopcloud.dev | Alice1234! |
+
+---
+
+## 9. Demo the Full Flow
+
+### 9a. Browse Products (No Auth Required)
+
+```bash
+API_URL=$(aws cloudformation describe-stacks \
+  --stack-name PlatformStack \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+  --output text)
+
+# Health check
+curl -s "$API_URL/health" | jq .
+
+# List products
+curl -s "$API_URL/api/products" | jq .
+
+# Search
+curl -s "$API_URL/api/search?q=keyboard" | jq .
+```
+
+### 9b. Place an Order (Triggers Full Saga)
+
+```bash
+# Get a JWT token (replace with your user pool details)
+TOKEN=$(aws cognito-idp initiate-auth \
+  --client-id YOUR_CLIENT_ID \
+  --auth-flow USER_PASSWORD_AUTH \
+  --auth-parameters USERNAME=alice@shopcloud.dev,PASSWORD=Alice1234! \
+  --query "AuthenticationResult.IdToken" --output text)
+
+# Create an order — triggers the saga:
+# OrderCreated -> InventoryReserved -> OrderReadyForPayment ->
+# PaymentSucceeded -> OrderConfirmed -> ShipmentCreated
+curl -s -X POST "$API_URL/api/orders" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -H "X-Correlation-Id: demo-001" \
   -d '{
-    "user_id": "usr_demo001",
     "items": [
-      {"product_id": "prod_001", "quantity": 2, "unit_price": 29.99},
-      {"product_id": "prod_002", "quantity": 1, "unit_price": 49.99}
+      {"productId": "p1", "quantity": 1, "price": 89.99},
+      {"productId": "p3", "quantity": 2, "price": 74.99}
     ],
-    "shipping_address": {
-      "street": "123 Huntington Ave",
-      "city": "Boston",
-      "state": "MA",
-      "zip": "02115"
-    }
-  }' | python3 -m json.tool
+    "total": 239.97,
+    "shippingAddress": {"street": "123 Main St", "city": "Boston", "state": "MA", "zip": "02101"}
+  }' | jq .
 ```
 
-**Expected response (201):**
+### 9c. Watch the Event Flow in CloudWatch
 
-```json
-{
-  "message": "Order created",
-  "order": {
-    "order_id": "ord_a1b2c3d4e5f6",
-    "user_id": "usr_demo001",
-    "status": "PENDING",
-    "total_amount": "109.97",
-    "currency": "USD",
-    "items": [...]
-  }
-}
-```
+Open the AWS Console and navigate to **CloudWatch > Log Groups**. Watch these in order:
 
-**What happens behind the scenes:**
-1. Order service creates the order in DynamoDB (`status: PENDING`).
-2. Saga state is initialized in the saga-state table.
-3. Saga transitions to `PAYMENT_PROCESSING`.
-4. An `order.created` event is published to EventBridge.
+1. `/aws/lambda/order-api-service` — Order creation
+2. `/aws/lambda/inventory-service` — Stock reservation
+3. `/aws/lambda/order-event-service` — Saga processing
+4. `/aws/lambda/payment-event-service` — Payment processing
+5. `/aws/lambda/shipping-service` — Shipment creation
+6. `/aws/lambda/notification-service` — Email notifications
 
-Save the order ID:
+### 9d. Check Order Status
 
 ```bash
-export ORDER_ID="ord_a1b2c3d4e5f6"   # use the actual ID from the response
+ORDER_ID="<from the create order response>"
+
+curl -s "$API_URL/api/orders/$ORDER_ID" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+
+# View order history
+curl -s "$API_URL/api/me/orders" \
+  -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
-### Step 2: Watch the Saga Progress
+### 9e. Use the Frontend
 
-The saga runs automatically through EventBridge events. Check the order status after a few seconds:
+Open the CloudFront URL in your browser:
+
+```
+https://d1234abcd.cloudfront.net
+```
+
+1. Browse the product catalog
+2. Add items to cart
+3. Sign in with Alice's credentials
+4. Place an order
+5. Check order history
+
+---
+
+## 10. EventBridge Event Inspection
+
+View events flowing through the bus:
 
 ```bash
-curl -s "$API_URL/orders/$ORDER_ID" | python3 -m json.tool
-```
-
-**Expected status progression (check every 2-3 seconds):**
-
-| Time | Status | What Happened |
-|------|--------|---------------|
-| 0s | `PENDING` | Order created |
-| ~1s | `PAYMENT_PROCESSING` | Waiting for Stripe charge |
-| ~3s | `PAYMENT_COMPLETED` | Stripe charge succeeded |
-| ~4s | `INVENTORY_RESERVING` | Waiting for M4 to reserve stock |
-| ~6s | `CONFIRMED` | All steps succeeded — order finalized |
-
-### Step 3: Verify in CloudWatch Logs
-
-Search for the correlation ID to trace the full request across both services:
-
-```
-fields @timestamp, service, message, order_id, saga_state
-| filter correlation_id = "demo-001"
-| sort @timestamp asc
-```
-
-**Expected log sequence:**
-
-```
-[order-service]         API request received — POST /orders
-[order-service-saga]    Saga started — awaiting payment
-[payment-service]       Processing payment for order
-[stripe-client]         Creating Stripe charge
-[stripe-client]         Stripe charge created
-[payment-service]       Payment completed successfully
-[order-service-saga]    Payment completed — awaiting inventory reservation
-[order-service-saga]    Order confirmed — saga complete
+# Check DLQ for failed events
+aws sqs get-queue-attributes \
+  --queue-url $(aws cloudformation describe-stacks --stack-name InventoryStack \
+    --query "Stacks[0].Outputs[?OutputKey=='InventoryDLQUrl'].OutputValue" --output text) \
+  --attribute-names ApproximateNumberOfMessages | jq .
 ```
 
 ---
 
-## Demo 2: Payment Failure — Card Declined
-
-This shows what happens when the customer's card is declined. No compensation is needed because nothing succeeded before the failure.
-
-### Step 1: Create an Order (with a card that will be declined)
-
-In Stripe test mode, the token `tok_chargeDeclined` triggers a decline:
+## 11. Tear Down
 
 ```bash
-curl -s -X POST "$API_URL/orders" \
-  -H "Content-Type: application/json" \
-  -H "X-Correlation-Id: demo-002" \
-  -d '{
-    "user_id": "usr_demo002",
-    "items": [
-      {"product_id": "prod_003", "quantity": 1, "unit_price": 99.99}
-    ]
-  }' | python3 -m json.tool
+npx cdk destroy --all
 ```
 
-### Step 2: Check the Order Status
-
-```bash
-curl -s "$API_URL/orders/$ORDER_ID" | python3 -m json.tool
-```
-
-**Expected result:**
-
-```json
-{
-  "order": {
-    "order_id": "ord_...",
-    "status": "CANCELLED",
-    "cancellation_reason": "Payment failed: Your card was declined"
-  }
-}
-```
-
-**Saga flow:**
-
-```
-PENDING → PAYMENT_PROCESSING → PAYMENT_FAILED → CANCELLED
-```
-
-No compensation is triggered because no money was charged.
+**Warning:** This permanently deletes all data (DynamoDB tables, S3 buckets, etc.).
 
 ---
 
-## Demo 3: Inventory Failure — Compensation (Refund)
+## Troubleshooting
 
-This is the most important demo — it shows the saga compensation pattern. Payment succeeds, but inventory is unavailable, so the system automatically refunds the customer.
+**CDK deploy fails with "resource already exists"**
+A previous deployment may have left orphaned resources. Delete them manually in the AWS Console, then retry.
 
-### Step 1: Create an Order for an Out-of-Stock Item
+**Order stays in PENDING status**
+Check the order-event-service and inventory-service CloudWatch logs. The inventory service may be waiting for the product to exist in the InventoryTable.
 
-```bash
-curl -s -X POST "$API_URL/orders" \
-  -H "Content-Type: application/json" \
-  -H "X-Correlation-Id: demo-003" \
-  -d '{
-    "user_id": "usr_demo003",
-    "items": [
-      {"product_id": "prod_out_of_stock", "quantity": 100, "unit_price": 9.99}
-    ]
-  }' | python3 -m json.tool
-```
+**"Module not found" errors in Lambda**
+The Lambda layer may not have been built correctly. Ensure `layers/common/python/` contains both `common/` and `shared/` directories.
 
-### Step 2: Watch the Compensation Flow
+**ECS tasks keep restarting**
+Check the task logs in CloudWatch. The product service needs the DynamoDB `products` table to exist and be accessible. The cart service needs Redis (running as a sidecar).
 
-Check status every 2-3 seconds:
+**Frontend shows blank page**
+CloudFront may need 2-3 minutes to propagate after first deploy. Check that `CONFIG` in `index.html` has correct values.
 
-```bash
-curl -s "$API_URL/orders/$ORDER_ID" | python3 -m json.tool
-```
-
-**Expected status progression:**
-
-| Time | Status | What Happened |
-|------|--------|---------------|
-| 0s | `PENDING` | Order created |
-| ~3s | `PAYMENT_COMPLETED` | Stripe charged $999.00 |
-| ~5s | `INVENTORY_RESERVING` | M4 inventory checking stock |
-| ~7s | `COMPENSATING` | Inventory failed — refunding payment |
-| ~10s | `CANCELLED` | Refund completed — order cancelled |
-
-**Saga flow:**
-
-```
-PENDING → PAYMENT_PROCESSING → PAYMENT_COMPLETED → INVENTORY_RESERVING
-    → INVENTORY_FAILED → COMPENSATING → CANCELLED
-```
-
-### Step 3: Verify the Refund
-
-Check the saga state to see the full history:
-
-```bash
-# Query the saga-state table directly via AWS CLI
-aws dynamodb get-item \
-  --table-name dev-saga-state \
-  --key '{"order_id": {"S": "'$ORDER_ID'"}}' \
-  --query 'Item.history' | python3 -m json.tool
-```
-
-**Expected history (6 transitions):**
-
-```json
-[
-  {"from_state": null, "to_state": "PENDING", "reason": "Order created"},
-  {"from_state": "PENDING", "to_state": "PAYMENT_PROCESSING", "reason": "Initiating payment"},
-  {"from_state": "PAYMENT_PROCESSING", "to_state": "PAYMENT_COMPLETED", "reason": "Payment completed: pay_..."},
-  {"from_state": "PAYMENT_COMPLETED", "to_state": "INVENTORY_RESERVING", "reason": "Requesting inventory"},
-  {"from_state": "INVENTORY_RESERVING", "to_state": "INVENTORY_FAILED", "reason": "Insufficient stock"},
-  {"from_state": "INVENTORY_FAILED", "to_state": "COMPENSATING", "reason": "Starting compensation: refund"},
-  {"from_state": "COMPENSATING", "to_state": "CANCELLED", "reason": "Payment refunded: re_..."}
-]
-```
-
-You can also verify the refund in the Stripe Dashboard under **Payments → Refunded**.
-
----
-
-## Demo 4: Idempotency — No Double Charges
-
-This shows that retrying the same event does not charge the customer twice.
-
-### Step 1: Simulate a Duplicate Event
-
-Manually publish the same `order.created` event twice to EventBridge:
-
-```bash
-# Publish the event
-aws events put-events --entries '[{
-  "Source": "ecommerce.m2",
-  "DetailType": "order.created",
-  "Detail": "{\"metadata\":{\"correlation_id\":\"demo-004\"},\"data\":{\"order_id\":\"ord_idem_test\",\"user_id\":\"usr_demo004\",\"items\":[{\"product_id\":\"p1\",\"quantity\":1,\"unit_price\":50.00}],\"total_amount\":50.00,\"currency\":\"USD\",\"idempotency_key\":\"idem_demo004\"}}",
-  "EventBusName": "ecommerce-event-bus"
-}]'
-
-# Wait 2 seconds, then send the SAME event again (simulating retry)
-sleep 2
-
-aws events put-events --entries '[{
-  "Source": "ecommerce.m2",
-  "DetailType": "order.created",
-  "Detail": "{\"metadata\":{\"correlation_id\":\"demo-004\"},\"data\":{\"order_id\":\"ord_idem_test\",\"user_id\":\"usr_demo004\",\"items\":[{\"product_id\":\"p1\",\"quantity\":1,\"unit_price\":50.00}],\"total_amount\":50.00,\"currency\":\"USD\",\"idempotency_key\":\"idem_demo004\"}}",
-  "EventBusName": "ecommerce-event-bus"
-}]'
-```
-
-### Step 2: Verify Only One Charge
-
-Check the payments table:
-
-```bash
-aws dynamodb query \
-  --table-name dev-payments \
-  --index-name order_id-index \
-  --key-condition-expression "order_id = :oid" \
-  --expression-attribute-values '{":oid": {"S": "ord_idem_test"}}' \
-  | python3 -m json.tool
-```
-
-**Expected:** Only **one** payment record exists, not two.
-
-Check the CloudWatch logs — you should see:
-
-```
-[payment-service]       New idempotency key — processing payment         ← First event
-[payment-idempotency]   Payment result cached for idempotency key
-...
-[payment-idempotency]   Idempotency key found — returning cached result  ← Retry (no charge)
-```
-
----
-
-## Demo 5: User-Initiated Cancellation
-
-This shows a user cancelling an order that's still in progress.
-
-### Step 1: Create an Order
-
-```bash
-curl -s -X POST "$API_URL/orders" \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "usr_demo005", "items": [{"product_id": "p1", "quantity": 1, "unit_price": 25.00}]}' \
-  | python3 -m json.tool
-```
-
-### Step 2: Cancel Before Payment Completes
-
-```bash
-curl -s -X PUT "$API_URL/orders/$ORDER_ID/cancel" | python3 -m json.tool
-```
-
-**If payment hasn't been charged yet:**
-
-```json
-{
-  "message": "Order cancelled",
-  "order_id": "ord_..."
-}
-```
-
-**If payment was already charged:**
-
-```json
-{
-  "message": "Cancellation initiated — refund in progress",
-  "order_id": "ord_..."
-}
-```
-
-In the second case, the compensation flow triggers automatically to refund the payment.
-
----
-
-## Demo 6: Running the Tests
-
-Show that all unit tests pass using mocked AWS (no real infrastructure needed):
-
-```bash
-pytest tests/ -v
-```
-
-**Expected output:**
-
-```
-tests/test_order_handler.py::TestCreateOrder::test_create_order_success         PASSED
-tests/test_order_handler.py::TestCreateOrder::test_create_order_missing_user_id PASSED
-tests/test_order_handler.py::TestCreateOrder::test_create_order_missing_items   PASSED
-tests/test_order_handler.py::TestCreateOrder::test_create_order_invalid_item    PASSED
-tests/test_order_handler.py::TestGetOrder::test_get_order_success              PASSED
-tests/test_order_handler.py::TestGetOrder::test_get_order_not_found            PASSED
-tests/test_order_handler.py::TestCancelOrder::test_cancel_pending_order        PASSED
-tests/test_order_handler.py::TestCancelOrder::test_cancel_nonexistent_order    PASSED
-tests/test_order_handler.py::TestRouting::test_unknown_route_returns_404       PASSED
-tests/test_payment_handler.py::TestOrderCreatedEvent::test_successful_payment  PASSED
-tests/test_payment_handler.py::TestOrderCreatedEvent::test_idempotent_retry    PASSED
-tests/test_payment_handler.py::TestOrderCreatedEvent::test_payment_card_declined PASSED
-tests/test_payment_handler.py::TestCompensatePaymentEvent::test_successful_refund PASSED
-tests/test_saga.py::TestSagaHappyPath::test_start_saga                        PASSED
-tests/test_saga.py::TestSagaHappyPath::test_payment_completed_advances        PASSED
-tests/test_saga.py::TestSagaHappyPath::test_inventory_reserved_confirms       PASSED
-tests/test_saga.py::TestSagaPaymentFailure::test_payment_failed_cancels       PASSED
-tests/test_saga.py::TestSagaCompensation::test_inventory_failed_compensates   PASSED
-tests/test_saga.py::TestSagaStateHistory::test_saga_records_history           PASSED
-
-==================== 19 passed ====================
-```
-
----
-
-## Demo Script Summary
-
-| # | Demo | What It Proves | Key Pattern |
-|---|------|---------------|-------------|
-| 1 | Happy path | Full saga completes across services | Saga orchestration |
-| 2 | Card declined | Failure before any success — clean cancel | Saga failure handling |
-| 3 | Inventory failure | Payment refunded automatically after downstream failure | **Saga compensation** |
-| 4 | Duplicate event | Same event processed twice — only one charge | **Idempotency** |
-| 5 | User cancellation | Cancel triggers refund if payment already charged | API + compensation |
-| 6 | Unit tests | All logic works with mocked AWS — no infra needed | Testability |
-
----
-
-## Talking Points for Presentation
-
-When demoing, highlight these design decisions:
-
-1. **"Why not just call the payment service directly?"**
-   → Services communicate via events (EventBridge) so they're decoupled. The order service doesn't need to know the payment service's URL, and if payment is slow, it doesn't block the API response.
-
-2. **"What happens if the same event is delivered twice?"**
-   → The idempotency key table catches duplicates. We have double protection — our DynamoDB check AND Stripe's built-in idempotency.
-
-3. **"What if Stripe goes down?"**
-   → The circuit breaker trips after 5 consecutive failures. Instead of waiting for timeouts (expensive on Lambda), it fails fast. The failed event goes to a dead-letter queue for retry when Stripe recovers.
-
-4. **"How do you debug a failed order?"**
-   → Every request has a correlation ID that flows through all services. Search CloudWatch Logs with that ID to see the full trace. The saga state table also records every transition with timestamps and reasons.
-
-5. **"What if the refund itself fails?"**
-   → The saga enters a `COMPENSATING` state and the event goes to the DLQ. A CloudWatch alarm (set up by M1) fires, and the operations team can manually retry or investigate.
+**CORS errors in browser**
+Ensure the API Gateway CORS settings include your CloudFront domain. The current config allows `*` origins.

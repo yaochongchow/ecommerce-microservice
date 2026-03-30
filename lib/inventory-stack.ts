@@ -123,6 +123,14 @@ removalPolicy: cdk.RemovalPolicy.DESTROY,
       targets: [new targets.SqsQueue(inventoryQueue)],
     });
 
+    // When saga compensation is needed, release reserved inventory
+    new events.Rule(this, "CompensateInventoryRule", {
+      eventBus,
+      ruleName: "inventory-compensate",
+      eventPattern: { source: ["order-service"], detailType: ["CompensateInventory"] },
+      targets: [new targets.SqsQueue(inventoryQueue)],
+    });
+
     // When items ship, clear them from reserved (they've left the warehouse)
     new events.Rule(this, "ShipmentCreatedRule", {
       eventBus,

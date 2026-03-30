@@ -19,7 +19,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 
-export class M1PlatformStack extends cdk.Stack {
+export class PlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
@@ -145,15 +145,15 @@ export class M1PlatformStack extends cdk.Stack {
       timeToLiveAttribute: 'expiresAt',
     });
 
-    // ── 6. EventBridge bus + SQS DLQ ─────────────────────────────────────────
+    // ── 6. Shared EventBridge bus (from SharedStack via SSM) + SQS DLQ ───────
     const dlq = new sqs.Queue(this, 'EventDLQ', {
       retentionPeriod: cdk.Duration.days(14),
       encryption: sqs.QueueEncryption.SQS_MANAGED,
     });
 
-    const eventBus = new events.EventBus(this, 'EcommBus', {
-      eventBusName: 'ecomm-events',
-    });
+    const eventBusArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/event-bus-arn');
+    const eventBusName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/event-bus-name');
+    const eventBus = events.EventBus.fromEventBusArn(this, 'SharedBus', eventBusArn);
 
     // ── 7. Alarms ─────────────────────────────────────────────────────────────
     const alertsTopic = new sns.Topic(this, 'AlertsTopic');
@@ -176,35 +176,42 @@ export class M1PlatformStack extends cdk.Stack {
     userPool.addTrigger(cognito.UserPoolOperation.POST_CONFIRMATION, postConfirmFn);
 
     // ── 9. User service Lambda ────────────────────────────────────────────────
-    const userFn = makeFn('UserFn', 'user-service-index', '/aws/lambda/ecomm-user-service', {
+    const userFn = makeFn('UserFn', 'user-service', '/aws/lambda/ecomm-user-service', {
       USERS_TABLE:             usersTable.tableName,
       CARTS_TABLE:             cartsTable.tableName,
       ORDER_REF_TABLE:         orderRefTable.tableName,
       SESSIONS_TABLE:          sessionsTable.tableName,
-      EVENT_BUS_NAME:          eventBus.eventBusName,
+      EVENT_BUS_NAME:          eventBusName,
       POWERTOOLS_SERVICE_NAME: 'user-service',
     });
     [usersTable, cartsTable, orderRefTable, sessionsTable].forEach(t => t.grantReadWriteData(userFn));
     eventBus.grantPutEventsTo(userFn);
 
-    new events.Rule(this, 'OrderCreatedRule', {
+    new events.Rule(this, 'OrderEventsRule', {
       eventBus,
       eventPattern: {
-        source: ['ecomm.order'],
-        detailType: ['order.created', 'order.confirmed', 'order.cancelled'],
+        source: ['order-service'],
+        detailType: ['OrderCreated', 'OrderConfirmed', 'OrderCanceled'],
       },
       targets: [new eventsTargets.LambdaFunction(userFn, { deadLetterQueue: dlq, retryAttempts: 2 })],
     });
 
     // ── 10. BFF Lambda ────────────────────────────────────────────────────────
+    const orderApiFnName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-name');
+
     const bffFn = makeFn('BffFn', 'bff', '/aws/lambda/ecomm-bff', {
-      EVENT_BUS_NAME:          eventBus.eventBusName,
+      EVENT_BUS_NAME:          eventBusName,
       USER_POOL_ID:            userPool.userPoolId,
       USER_FN_NAME:            userFn.functionName,
+      ORDER_API_FN_NAME:       orderApiFnName,
       POWERTOOLS_SERVICE_NAME: 'bff',
     }, 1024);
     userFn.grantInvoke(bffFn);
     eventBus.grantPutEventsTo(bffFn);
+
+    const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
+    const orderApiFn = lambda.Function.fromFunctionArn(this, 'OrderApiFn', orderApiFnArn);
+    orderApiFn.grantInvoke(bffFn);
 
     // ── 11. HTTP API Gateway ──────────────────────────────────────────────────
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
@@ -277,17 +284,14 @@ export class M1PlatformStack extends cdk.Stack {
     }
 
     // ── 13. SSM parameters ────────────────────────────────────────────────────
-    const params: Record<string, string> = {
-      '/ecomm/event-bus-arn':       eventBus.eventBusArn,
-      '/ecomm/event-bus-name':      eventBus.eventBusName,
-      '/ecomm/dlq-url':             dlq.queueUrl,
-      '/ecomm/user-pool-id':        userPool.userPoolId,
-      '/ecomm/user-pool-client-id': userPoolClient.userPoolClientId,
-      '/ecomm/api-url':             httpApi.apiEndpoint,
-      '/ecomm/cf-domain':           distribution.distributionDomainName,
-      '/ecomm/frontend-bucket':     frontendBucket.bucketName,
+    const platformParams: Record<string, string> = {
+      '/ecommerce/user-pool-id': userPool.userPoolId,
+      '/ecommerce/user-pool-client-id': userPoolClient.userPoolClientId,
+      '/ecommerce/api-url': httpApi.apiEndpoint,
+      '/ecommerce/cf-domain': distribution.distributionDomainName,
+      '/ecommerce/frontend-bucket': frontendBucket.bucketName,
     };
-    for (const [name, value] of Object.entries(params)) {
+    for (const [name, value] of Object.entries(platformParams)) {
       new ssm.StringParameter(this, name.replace(/\//g, '_').replace(/^_/, ''), {
         parameterName: name, stringValue: value,
       });
@@ -299,6 +303,5 @@ export class M1PlatformStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserPoolId',         { value: userPool.userPoolId });
     new cdk.CfnOutput(this, 'UserPoolClientId',   { value: userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'FrontendBucketName', { value: frontendBucket.bucketName });
-    new cdk.CfnOutput(this, 'EventBusArn',        { value: eventBus.eventBusArn });
   }
 }

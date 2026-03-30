@@ -6,7 +6,7 @@ from service import create_shipment
 logger = get_logger(__name__)
 
 
-def lambda_handler(event: dict, context):
+def lambda_handler(event, context):
     logger.info(f"Received event: {json.dumps(event)}")
     event = unwrap_event(event)
 
@@ -14,15 +14,14 @@ def lambda_handler(event: dict, context):
     detail = get_detail(event)
 
     try:
-        if detail_type == "PaymentSucceeded":
+        if detail_type == "OrderConfirmed":
             shipment = create_shipment(
                 order_id=detail["orderId"],
-                email=detail["email"],
-                shipping_address=detail["shippingAddress"],
+                email=detail.get("email", "customer@example.com"),
+                shipping_address=detail.get("shippingAddress", {}),
                 items=detail.get("items", []),
             )
             return {"status": "created", "shipmentId": shipment["shipmentId"]}
-
         else:
             logger.warning(f"Unhandled detail-type: {detail_type}")
             return {"status": "ignored", "detail-type": detail_type}
@@ -30,7 +29,6 @@ def lambda_handler(event: dict, context):
     except KeyError as e:
         logger.error(f"Missing field in event: {e}")
         return {"status": "error", "message": f"Missing field: {e}"}
-
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         raise

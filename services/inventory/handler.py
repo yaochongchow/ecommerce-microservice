@@ -29,7 +29,7 @@ def lambda_handler(event: dict, context):
             reserve_inventory(detail["orderId"], detail["items"])
             return {"status": "reserved", "orderId": detail["orderId"]}
 
-        elif detail_type == "OrderCanceled":
+        elif detail_type in ("OrderCanceled", "CompensateInventory"):
             # Items and quantities come from reservations table — no need to read event items
             release_inventory(detail["orderId"])
             return {"status": "released", "orderId": detail["orderId"]}

@@ -68,10 +68,10 @@ export class ShippingStack extends cdk.Stack {
       batchSize: 1,
     }));
 
-    new events.Rule(this, 'PaymentSucceededRule', {
+    new events.Rule(this, 'OrderConfirmedRule', {
       eventBus,
-      ruleName: 'shipping-payment-succeeded',
-      eventPattern: { source: ['payment-service'], detailType: ['PaymentSucceeded'] },
+      ruleName: 'shipping-order-confirmed',
+      eventPattern: { source: ['order-service'], detailType: ['OrderConfirmed'] },
       targets: [new targets.SqsQueue(shippingQueue)],
     });
 

@@ -55,10 +55,10 @@ export class NotificationStack extends cdk.Stack {
       batchSize: 1,
     }));
 
-    new events.Rule(this, 'PaymentSucceededRule', {
+    new events.Rule(this, 'OrderConfirmedRule', {
       eventBus,
-      ruleName: 'notification-payment-succeeded',
-      eventPattern: { source: ['payment-service'], detailType: ['PaymentSucceeded'] },
+      ruleName: 'notification-order-confirmed',
+      eventPattern: { source: ['order-service'], detailType: ['OrderConfirmed'] },
       targets: [new targets.SqsQueue(notificationQueue)],
     });
 

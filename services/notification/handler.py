@@ -6,7 +6,7 @@ from service import notify_payment_succeeded, notify_shipment_created, notify_or
 logger = get_logger(__name__)
 
 
-def lambda_handler(event: dict, context):
+def lambda_handler(event, context):
     logger.info(f"Received event: {json.dumps(event)}")
     event = unwrap_event(event)
 
@@ -14,7 +14,7 @@ def lambda_handler(event: dict, context):
     detail = get_detail(event)
 
     try:
-        if detail_type == "PaymentSucceeded":
+        if detail_type == "OrderConfirmed":
             notify_payment_succeeded(detail)
             return {"status": "sent", "type": "order_confirmation"}
 
@@ -33,7 +33,6 @@ def lambda_handler(event: dict, context):
     except KeyError as e:
         logger.error(f"Missing field in event: {e}")
         return {"status": "error", "message": f"Missing field: {e}"}
-
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         raise
