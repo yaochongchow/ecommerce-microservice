@@ -18,10 +18,10 @@ class TestOrdersTable:
 
     def test_order_stored_correctly(self, aws_mock, sample_order_items, mocker):
         """Verify the full order record structure in DynamoDB."""
-        mocker.patch("order_service.saga.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("order.saga.publish_event", return_value={"FailedEntryCount": 0})
 
-        from order_service.models import create_order, create_saga_state
-        from order_service.saga import start_saga
+        from order.models import create_order, create_saga_state
+        from order.saga import start_saga
 
         # Create an order and start the saga
         order = create_order(
@@ -56,9 +56,9 @@ class TestOrdersTable:
 
     def test_scan_all_orders(self, aws_mock, sample_order_items, mocker):
         """Create multiple orders and scan the entire table."""
-        mocker.patch("order_service.saga.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("order.saga.publish_event", return_value={"FailedEntryCount": 0})
 
-        from order_service.models import create_order
+        from order.models import create_order
 
         # Create 3 orders
         orders = []
@@ -84,10 +84,10 @@ class TestSagaStateTable:
 
     def test_saga_state_after_start(self, aws_mock, sample_order_items, mocker):
         """Verify saga state and history after starting the saga."""
-        mocker.patch("order_service.saga.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("order.saga.publish_event", return_value={"FailedEntryCount": 0})
 
-        from order_service.models import create_order, create_saga_state
-        from order_service.saga import start_saga
+        from order.models import create_order, create_saga_state
+        from order.saga import start_saga
 
         order = create_order(user_id="usr_saga_table", items=sample_order_items)
         create_saga_state(order["order_id"])
@@ -116,10 +116,10 @@ class TestSagaStateTable:
 
     def test_saga_full_happy_path(self, aws_mock, sample_order_items, mocker):
         """Walk through the entire happy path and inspect final saga state."""
-        mocker.patch("order_service.saga.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("order.saga.publish_event", return_value={"FailedEntryCount": 0})
 
-        from order_service.models import create_order, create_saga_state
-        from order_service.saga import (
+        from order.models import create_order, create_saga_state
+        from order.saga import (
             handle_inventory_reserved,
             handle_payment_completed,
             start_saga,
@@ -174,12 +174,12 @@ class TestSagaStateTable:
 
     def test_saga_compensation_path(self, aws_mock, sample_order_items, mocker):
         """Walk through the compensation path and inspect saga state."""
-        mocker.patch("order_service.saga.publish_event", return_value={"FailedEntryCount": 0})
-        mocker.patch("order_service.compensation.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("order.saga.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("order.compensation.publish_event", return_value={"FailedEntryCount": 0})
 
-        from order_service.compensation import handle_inventory_released
-        from order_service.models import create_order, create_saga_state
-        from order_service.saga import (
+        from order.compensation import handle_inventory_released
+        from order.models import create_order, create_saga_state
+        from order.saga import (
             handle_inventory_reserved,
             handle_payment_failed,
             start_saga,
@@ -236,25 +236,23 @@ class TestPaymentsTable:
     def test_payment_stored_after_charge(self, aws_mock, lambda_context, mocker):
         """Verify the payment record and idempotency key after a successful charge."""
         mocker.patch(
-            "payment_service.stripe_client.stripe.Charge.create",
+            "payment.stripe_client.stripe.Charge.create",
             return_value=mocker.Mock(id="ch_table_test", status="succeeded"),
         )
-        mocker.patch("payment_service.handler.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("payment.handler.publish_event", return_value={"FailedEntryCount": 0})
 
-        from payment_service.handler import event_handler
+        from payment.handler import event_handler
 
         event = {
-            "detail-type": "order.ready_for_payment",
+            "detail-type": "OrderReadyForPayment",
             "detail": {
-                "metadata": {"correlation_id": "corr-table-test"},
-                "data": {
-                    "order_id": "ord_table_test",
-                    "user_id": "usr_table_test",
-                    "items": [{"product_id": "p1", "quantity": 1, "unit_price": 49.99}],
-                    "total_amount": 49.99,
-                    "currency": "USD",
-                    "idempotency_key": "idem_table_test",
-                },
+                "orderId": "ord_table_test",
+                "userId": "usr_table_test",
+                "items": [{"productId": "p1", "quantity": 1, "unitPrice": 49.99}],
+                "totalAmount": 49.99,
+                "currency": "USD",
+                "idempotencyKey": "idem_table_test",
+                "correlationId": "corr-table-test",
             },
         }
         event_handler(event, lambda_context)
@@ -299,45 +297,39 @@ class TestPaymentsTable:
     def test_payment_refund_updates_record(self, aws_mock, lambda_context, mocker):
         """Verify the payment record after a refund."""
         mocker.patch(
-            "payment_service.stripe_client.stripe.Charge.create",
+            "payment.stripe_client.stripe.Charge.create",
             return_value=mocker.Mock(id="ch_refund_table", status="succeeded"),
         )
         mocker.patch(
-            "payment_service.stripe_client.stripe.Refund.create",
+            "payment.stripe_client.stripe.Refund.create",
             return_value=mocker.Mock(id="re_table_test", amount=4999, status="succeeded"),
         )
-        mocker.patch("payment_service.handler.publish_event", return_value={"FailedEntryCount": 0})
+        mocker.patch("payment.handler.publish_event", return_value={"FailedEntryCount": 0})
 
-        from payment_service.handler import event_handler
+        from payment.handler import event_handler
 
         # Step 1: Create the payment
         event_handler({
-            "detail-type": "order.ready_for_payment",
+            "detail-type": "OrderReadyForPayment",
             "detail": {
-                "metadata": {"correlation_id": "corr-refund-table"},
-                "data": {
-                    "order_id": "ord_refund_table",
-                    "user_id": "usr_refund_table",
-                    "items": [{"product_id": "p1", "quantity": 1, "unit_price": 49.99}],
-                    "total_amount": 49.99,
-                    "currency": "USD",
-                    "idempotency_key": "idem_refund_table",
-                },
+                "orderId": "ord_refund_table",
+                "userId": "usr_refund_table",
+                "items": [{"productId": "p1", "quantity": 1, "unitPrice": 49.99}],
+                "totalAmount": 49.99,
+                "currency": "USD",
+                "idempotencyKey": "idem_refund_table",
+                "correlationId": "corr-refund-table",
             },
         }, lambda_context)
 
         # Step 2: Refund the payment
         event_handler({
-            "detail-type": "saga.compensate_payment",
+            "detail-type": "CompensatePayment",
             "detail": {
-                "metadata": {"correlation_id": "corr-refund-table"},
-                "data": {
-                    "order_id": "ord_refund_table",
-                    "charge_id": "ch_refund_table",
-                    "payment_id": "pay_x",
-                    "amount": 49.99,
-                    "reason": "Post-confirmation cancellation",
-                },
+                "orderId": "ord_refund_table",
+                "chargeId": "ch_refund_table",
+                "reason": "Post-confirmation cancellation",
+                "correlationId": "corr-refund-table",
             },
         }, lambda_context)
 
