@@ -1,4 +1,1 @@
-**.tfvars
-**.tfstate
-**.tfstate.*
-**/.terraform/
+.venv
