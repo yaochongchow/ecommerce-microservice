@@ -1,0 +1,14 @@
+# =============================================================================
+# Python dependencies for M2: Order & Payment microservices
+# =============================================================================
+
+# --- AWS SDK ---
+boto3>=1.34.0          # AWS SDK — DynamoDB, EventBridge, etc.
+
+# --- Payment Provider ---
+stripe>=8.0.0          # Stripe Python SDK for charges and refunds
+
+# --- Testing ---
+pytest>=8.0.0          # Test runner
+pytest-mock>=3.12.0    # Mock fixtures for pytest
+moto>=5.0.0            # AWS service mocking (DynamoDB, EventBridge, etc.)

@@ -1,281 +1,189 @@
-# E-Commerce Service
+# ShopCloud — Event-Driven E-Commerce Microservices
 
-## Product Service
+A serverless e-commerce platform built with AWS CDK (TypeScript). Seven independent microservices communicate exclusively through a shared EventBridge event bus — no direct service-to-service calls.
 
-**Product generation:** up to 500 products seeded on first boot. (5000 products max can be generated)
+## Team
 
-### API Endpoints
+| Member | Role | Services |
+|--------|------|----------|
+| M1 (Jonathan) | Platform + Gateway | Cognito, API Gateway, CloudFront, BFF Lambda, User service |
+| M2 (Charles) | Order + Payment | Order saga orchestration, idempotent payments, Stripe integration |
+| M3 (Chang) | Product + Cart | Product catalog (Go/ECS), Cart with Redis sessions (Go/ECS) |
+| M4 (Xihuan) | Inventory, Shipping, Notification + CI/CD | Stock reservation, shipment tracking, email notifications |
 
-#### `GET /products/`
-Returns a paginated list of active products.
-
-Query params:
-- `limit` — number of items to return (default 20)
-- `cursor` — opaque pagination token from a previous response's `next_cursor`
-
-Example:
-`GET "/products?limit=20"` and `"/products?limit=20&cursor={cursor}"`
-
-> **Note:** `limit` is not guaranteed — DynamoDB Scan returns items in partition order. If some items in a page are inactive they are filtered out, so fewer than `limit` items may be returned.
-
-```json
-{
-  "items": [
-    {
-      "product_id": 42,
-      "price": 119.35,
-      "name": "Apple Pro Black Macbook",
-      "category": "Macbook",
-      "color": "Black",
-      "brand": "Apple",
-      "is_active": true,
-      "image_url": "https://..."
-    }
-  ],
-  "next_cursor": "<opaque token>"
-}
-```
-
-#### `GET /products/:id`
-Returns product info based on provided id.
-
-Response `200`:
-```json
-{
-  "product_id": 42,
-  "price": 119.35,
-  "name": "Apple Pro Black Macbook",
-  "category": "Macbook",
-  "color": "Black",
-  "brand": "Apple",
-  "is_active": true,
-  "image_url": "https://..."
-}
-```
-
-Response `404`:
-```json
-{ "error": "NOT_FOUND", "message": "product 42 not found" }
-```
-
-#### `PUT /products/:id`
-Updates product info. Only provided fields are updated.
-
-Request body:
-```json
-{
-  "price": 999.99,
-  "category": "Macbook",
-  "name": "Macbook",
-  "brand": "Apple"
-}
-```
-
-Response `200`:
-```json
-{ "message": "product 42 updated successfully" }
-```
-
-#### `POST /products/pricecheck`
-Accepts a list of product IDs and returns their current prices.
-
-Request body:
-```json
-{ "product_ids": [1, 42, 87] }
-```
-
-Response `200`:
-```json
-{
-  "prices": {
-    "1":  54.36,
-    "42": 119.35,
-    "87": 43.52
-  }
-}
-```
-
-#### `GET /products/search?q=<keyword>`
-Searches products in memory by keyword against name, brand, category, and color.
-
-Response `200`:
-```json
-    {
-        "count": 2,
-        "items": [
-            {
-                "product_id": 12,
-                "price": 67.45,
-                "name": "Nike Training Black Sneakers",
-                "category": "Sneakers",
-                "color": "Black",
-                "brand": "Nike",
-                "is_active": true,
-                "image_url": "https://your-bucket.s3.us-east-1.amazonaws.com/products/nike_sneakers.jpg"
-            },
-            {
-                "product_id": 87,
-                "price": 43.20,
-                "name": "Nike Everyday Blue Sneakers",
-                "category": "Sneakers",
-                "color": "Blue",
-                "brand": "Nike",
-                "is_active": true,
-                "image_url": "https://your-bucket.s3.us-east-1.amazonaws.com/products/nike_sneakers.jpg"
-            },
-            
-        ]
-    }
+## Architecture
 
 ```
-
-All error response has format:
-```json
-{
-  "error": "{error}",
-  "message": "{error message}"
-}
+                         CloudFront (CDN)
+                              |
+                     API Gateway (JWT auth)
+                         /         \
+                    BFF Lambda    User Service
+                     /     \          |
+              [Products]  [Orders]  [DynamoDB]
+                  |           |
+            Product Svc   Order Svc -----> EventBridge Bus
+            (ECS/ALB)     (Lambda)              |
+                              |        +--------+--------+--------+
+                          Saga Engine  |        |        |        |
+                              |     Inventory Payment Shipping Notification
+                              |     (Lambda)  (Lambda) (Lambda)  (Lambda)
+                              |        |        |        |        |
+                              +--------+--------+--------+--------+
+                                    DynamoDB Tables + SQS Queues
 ```
 
----
+### Event Flow (Happy Path)
 
-### DynamoDB Table Schema
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer
 
-| Field        | Type   |
-|--------------|--------|
-| `product_id` | number |
-| `name`       | string |
-| `price`      | number |
-| `category`   | string |
-| `color`      | string |
-| `brand`      | string |
-| `is_active`  | bool   |
-| `image_url`  | string |
+    Customer->>+BFF: POST /api/orders
+    BFF->>+Order Service: Create order
+    Order Service->>EventBus: OrderCreated
+    EventBus->>+Inventory: Reserve stock
+    Inventory-->>-EventBus: InventoryReserved
 
-- **Partition key:** `product_id`
-- **Sort key:** `category`
+    Order Service->>EventBus: OrderReadyForPayment
+    EventBus->>+Payment: Charge card
+    Payment-->>-EventBus: PaymentSucceeded
 
----
+    Order Service->>EventBus: OrderConfirmed
+    EventBus->>+Shipping: Create shipment
+    EventBus->>+Notification: Send confirmation email
+    Notification-->>-Customer: Order confirmed email
 
-## Cart Service
-
-### Functionality
-- Storing and serving cart data
-- Cart expires after 48 hours if not checked out (abandoned)
-- Cart history is preserved after checkout or expiry
-
-### API Endpoints
-
-#### `GET /cart/:userId`
-Returns the user's current active cart.
-
-Response `200`:
-```json
-{
-  "cart_id": "550e8400-e29b-41d4-a716-446655440000",
-  "user_id": "user1",
-  "items": [
-    { "product_id": 1, "quantity": 2 }
-  ],
-  "created_at": "2026-03-30T00:00:00Z",
-  "updated_at": "2026-03-30T01:00:00Z",
-  "checked_out": false
-}
+    Shipping-->>EventBus: ShipmentCreated
+    deactivate Shipping
+    EventBus->>+Inventory: Fulfill stock
+    EventBus->>+Notification: Send tracking email
+    Notification-->>-Customer: Shipment + tracking email
 ```
 
-#### `POST /cart/create/:userId`
-Creates a new cart for the user. Returns `409 CONFLICT` if an active cart already exists.
-
-#### `POST /cart/add/:userId`
-Adds an item to the user's active cart. If the product is already in the cart, its quantity is incremented.
-
-Request body:
-```json
-{ "product_id": 1, "quantity": 2 }
-```
-
-#### `DELETE /cart/delete/:userId`
-Removes an item from the user's active cart.
-
-Request body:
-```json
-{ "product_id": 1 }
-```
-
-#### `PUT /cart/update/:userId`
-Updates the quantity of an item in the user's active cart.
-
-Request body:
-```json
-{ "product_id": 1, "quantity": 5 }
-```
-
-#### `POST /cart/deactivate/:userId`
-Checks out the active cart, moves it to cart history.
-
-Response `200`:
-```json
-{
-  "message": "cart 550e8400-... deactivated",
-  "user_id": "user1",
-  "cart_id": "550e8400-..."
-}
-```
-
-#### `GET /cart/:userId/pricecheck`
-Calls the product service for current prices and calculates the cart total.
-
-Request body:
-```json
-{ "product_ids": [1,42,87] }
-```
-
-Response `200`:
-```json
-{
-  "user_id": "user1",
-  "cart_id": "550e8400-...",
-  "items": [
-    { "product_id": 1, "quantity": 2, "price": 54.36 }
-  ],
-  "total": 108.72
-}
-```
-
-All error response has format:
-```json
-{
-  "error": "{error}",
-  "message": "{error message}"
-}
-```
-
----
-
-### Redis Design
+### Compensation Flow (Payment Fails)
 
 ```
-cart:active:<userId>   → cartID        (TTL: 48h — expires = abandoned cart)
-cart:shadow:<userId>   → cartID        (no TTL — lets expiry listener recover cartID)
-cart:data:<cartID>     → cart JSON     (no TTL — data outlives active key)
-cart:history:<userId>  → list of cartIDs
+OrderCreated -> InventoryReserved -> OrderReadyForPayment -> PaymentFailed
+    -> CompensateInventory -> InventoryReleased -> OrderCanceled
+    -> Notification sends cancellation email
 ```
 
-When `cart:active:<userId>` expires, a Redis keyspace notification triggers an expiry listener that reads the shadow key to find the cartID, marks the cart as abandoned, and appends it to cart history.
+## Project Structure
 
----
+```
+ecommerce-microservice/
+├── bin/ecomm.ts                    # CDK app entry point (all 7 stacks)
+├── lib/
+│   ├── shared-stack.ts             # EventBridge bus, SSM parameters
+│   ├── platform-stack.ts           # Cognito, API GW, CloudFront, BFF, User svc
+│   ├── order-payment-stack.ts      # Order + Payment Lambdas, DynamoDB, SQS
+│   ├── product-cart-stack.ts       # ECS Fargate, ALB, DynamoDB, Redis
+│   ├── inventory-stack.ts          # Inventory Lambda, DynamoDB, SQS
+│   ├── shipping-stack.ts           # Shipping Lambda, DynamoDB, SQS
+│   └── notification-stack.ts       # Notification Lambda, SES, SQS
+├── services/
+│   ├── order/                      # Order service (Python) — saga, compensation
+│   ├── payment/                    # Payment service (Python) — Stripe, idempotency
+│   ├── inventory/                  # Inventory service (Python) — reservation/release
+│   ├── shipping/                   # Shipping service (Python) — tracking
+│   ├── notification/               # Notification service (Python) — SES emails
+│   ├── product/                    # Product service (Go) — catalog CRUD
+│   └── cart/                       # Cart service (Go) — Redis sessions
+├── lambda/
+│   ├── bff/                        # BFF Lambda (TypeScript) — aggregation layer
+│   ├── user-service/               # User service Lambda (TypeScript)
+│   └── post-confirm/               # Cognito post-confirm trigger (TypeScript)
+├── layers/common/                  # Shared Python Lambda layer
+│   └── python/
+│       ├── common/                 # M4 utilities (event_utils, logger, responses)
+│       └── shared/                 # M2 utilities (events, exceptions, logger)
+├── frontend/index.html             # SPA frontend (S3 + CloudFront)
+├── tests/                          # Test suites
+└── .github/workflows/ci.yml       # CI/CD pipeline
+```
 
-## Deployment
+## CDK Stacks
 
-A CDK stack, each deployed independently:
+| Stack | Owner | Resources |
+|-------|-------|-----------|
+| `SharedStack` | M4 | EventBridge bus (`ecommerce-event-bus`), SSM parameters |
+| `PlatformStack` | M1 | Cognito, HTTP API Gateway, CloudFront, S3, BFF + User Lambdas, DLQ, alarms |
+| `OrderPaymentStack` | M2 | OrdersTable, SagaStateTable, PaymentsTable, IdempotencyKeysTable, 3 Lambdas, 2 SQS queues |
+| `ProductCartStack` | M3 | VPC, ECS cluster, ALB, Fargate tasks (product + cart + Redis), ProductsTable |
+| `InventoryStack` | M4 | InventoryTable, ReservationsTable, Lambda, SQS queue + DLQ |
+| `ShippingStack` | M4 | ShipmentsTable, Lambda, SQS queue + DLQ |
+| `NotificationStack` | M4 | Lambda, SES policy, SQS queue + DLQ |
 
-- **NetworkStack** — shared VPC and a single ALB with two port-based listeners:
-  - Port `80` → Product Service
-  - Port `8081` → Cart Service
-- **DynamoStack** — DynamoDB `products` table
-- **ProductServiceStack** — ECS Fargate service + S3 image bucket + SQS + EventBridge rules
-- **CartServiceStack** — ECS Fargate service with a Redis sidecar container
+## EventBridge Events
 
+| Event | Source | Consumed By |
+|-------|--------|-------------|
+| `OrderCreated` | `order-service` | inventory, notification, user-service |
+| `OrderReadyForPayment` | `order-service` | payment |
+| `OrderConfirmed` | `order-service` | shipping, notification, user-service |
+| `OrderCanceled` | `order-service` | inventory, notification, user-service |
+| `CompensateInventory` | `order-service` | inventory |
+| `PaymentSucceeded` | `payment-service` | order (saga) |
+| `PaymentFailed` | `payment-service` | order (saga) |
+| `InventoryReserved` | `inventory-service` | order (saga) |
+| `InventoryReservationFailed` | `inventory-service` | order (saga) |
+| `InventoryReleased` | `inventory-service` | order (saga) |
+| `ShipmentCreated` | `shipping-service` | inventory, notification |
+| `ProductCreated` | `product-service` | inventory |
+| `ProductRestocked` | `product-service` | inventory |
 
----
+## API Routes
 
+| Method | Path | Auth | Handler | Description |
+|--------|------|------|---------|-------------|
+| GET | `/health` | No | BFF | Liveness check |
+| GET | `/api/products` | No | BFF | Product catalog |
+| GET | `/api/products/{id}` | No | BFF | Single product |
+| GET | `/api/search?q=` | No | BFF | Product search |
+| POST | `/api/orders` | JWT | BFF -> Order svc | Create order (starts saga) |
+| GET | `/api/orders/{id}` | JWT | BFF -> Order svc | Order details |
+| GET | `/api/me` | JWT | User svc | User profile |
+| PUT | `/api/me` | JWT | User svc | Update profile |
+| GET | `/api/me/cart` | JWT | User svc | Get cart |
+| POST | `/api/me/cart` | JWT | User svc | Add to cart |
+| DELETE | `/api/me/cart/{itemId}` | JWT | User svc | Remove from cart |
+| GET | `/api/me/orders` | JWT | User svc | Order history |
+
+## Quick Start
+
+See [DEMO.md](DEMO.md) for detailed deployment and testing instructions.
+
+```bash
+npm install
+npm run build
+npx cdk bootstrap          # first time only
+npx cdk deploy --all       # deploy all 7 stacks
+```
+
+## Useful Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run build` | Compile TypeScript CDK code |
+| `npx cdk synth` | Synthesize CloudFormation templates |
+| `npx cdk deploy --all` | Deploy all stacks |
+| `npx cdk deploy SharedStack OrderPaymentStack` | Deploy specific stacks |
+| `npx cdk diff` | Compare deployed vs local |
+| `npx cdk destroy --all` | Tear down all resources |
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|-----------|
+| IaC | AWS CDK (TypeScript) |
+| API | API Gateway HTTP API + JWT Authorizer |
+| Auth | Cognito User Pool |
+| Compute | Lambda (Python 3.11, Node.js 20) + ECS Fargate (Go) |
+| Database | DynamoDB (on-demand) |
+| Cache | Redis (ECS sidecar) |
+| Eventing | EventBridge + SQS (with DLQs) |
+| CDN | CloudFront + S3 |
+| Monitoring | CloudWatch alarms + SNS alerts |
+| CI/CD | GitHub Actions |
