@@ -99,7 +99,7 @@ export class ProductCartStack extends cdk.Stack {
       desiredCount: 1,
     });
 
-    const cartListener = alb.addListener('CartListener', { port: 8081 });
+    const cartListener = alb.addListener('CartListener', { port: 8081, protocol: elbv2.ApplicationProtocol.HTTP });
     cartListener.addTargets('CartTarget', {
       port: 8080,
       targets: [cartService],
