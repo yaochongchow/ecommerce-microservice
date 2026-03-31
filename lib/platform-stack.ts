@@ -210,7 +210,10 @@ export class PlatformStack extends cdk.Stack {
     eventBus.grantPutEventsTo(bffFn);
 
     const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
-    const orderApiFn = lambda.Function.fromFunctionArn(this, 'OrderApiFn', orderApiFnArn);
+    const orderApiFn = lambda.Function.fromFunctionAttributes(this, 'OrderApiFn', {
+      functionArn: orderApiFnArn,
+      sameEnvironment: true,
+    });
     orderApiFn.grantInvoke(bffFn);
 
     // ── 11. HTTP API Gateway ──────────────────────────────────────────────────
