@@ -15,7 +15,7 @@ Creates shipment records when orders are confirmed. Generates mock tracking numb
 | Event | When | Consumed By |
 |-------|------|-------------|
 | `ShipmentCreated` | Shipment record created | Inventory (fulfill stock), Notification (tracking email) |
-| `ShipmentCreationFailed` | Storage error | DLQ for manual review |
+| `ShipmentCreationFailed` | Storage error | Order-service, payment-service for manual review |
 
 ### Consumed
 

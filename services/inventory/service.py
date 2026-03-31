@@ -58,6 +58,7 @@ def restock_product(product_id: str, quantity: int):
         if "ConditionalCheckFailedException" in type(e).__name__:
             _publish_event("ProductRestockFailed", {
                 "productId": product_id,
+                "quantity": quantity,
                 "reason": "product not found in inventory",
             })
             raise ValueError(f"Product {product_id} not found in inventory")
