@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -136,7 +137,48 @@ func SeedData(productsMap map[int]Item) error {
 	}
 
 	log.Printf("Database seeding completed! Seeded %d products in %d batches", len(productsMap), batchCount)
+
+	// Emit ProductCreated for each seeded product in batches of 10
+	log.Println("Emitting ProductCreated events...")
+	stocks := make(map[int]int, len(productsMap))
+	for _, product := range productsMap {
+		stocks[product.ID] = rand.Intn(71) + 10 // random 10-80
+	}
+	EmitProductCreatedBatch(productsMap, stocks)
+
 	return nil
+}
+
+// setProductActive updates is_active in DynamoDB and syncProducts
+func setProductActive(id int, active bool) {
+	ctx := context.Background()
+	val, ok := syncProducts.Load(id)
+	if !ok {
+		log.Printf("setProductActive: product %d not in memory, cannot update", id)
+		return
+	}
+	category := val.(Item).Category
+
+	_, err := dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(productsTable),
+		Key: map[string]types.AttributeValue{
+			"product_id": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", id)},
+			"category":   &types.AttributeValueMemberS{Value: category},
+		},
+		UpdateExpression: aws.String("SET is_active = :active"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":active": &types.AttributeValueMemberBOOL{Value: active},
+		},
+	})
+	if err != nil {
+		log.Printf("setProductActive: failed to update product %d: %v", id, err)
+		return
+	}
+	if val, ok := syncProducts.Load(id); ok {
+		item := val.(Item)
+		item.IsActive = active
+		syncProducts.Store(id, item)
+	}
 }
 
 // LoadProductsIntoMemory scans all products from DynamoDB and returns them as a map

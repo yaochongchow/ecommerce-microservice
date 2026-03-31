@@ -15,6 +15,7 @@ RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 COPY --from=build /src/server .
+COPY --from=build /src/product_images ./product_images
 
 EXPOSE 8080
 ENTRYPOINT ["./server"]

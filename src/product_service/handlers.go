@@ -1,11 +1,13 @@
 package main
 
 import (
+    "encoding/base64"
+    "encoding/json"
     "errors"
+    "fmt"
     "net/http"
     "strconv"
     "strings"
-    "fmt"
     "github.com/gin-gonic/gin"
     "github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
     "github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -59,10 +61,21 @@ func getProductList(c *gin.Context) {
         },
     }
 
-    // If cursor is provided, use it as ExclusiveStartKey
+    // If cursor is provided, decode it as base64 JSON LastEvaluatedKey
     if cursor := c.Query("cursor"); cursor != "" {
-        scanInput.ExclusiveStartKey = map[string]types.AttributeValue{
-            "product_id": &types.AttributeValueMemberN{Value: cursor},
+        raw, err := base64.StdEncoding.DecodeString(cursor)
+        if err == nil {
+            var keyMap map[string]map[string]string
+            if err := json.Unmarshal(raw, &keyMap); err == nil {
+                startKey := map[string]types.AttributeValue{}
+                if v, ok := keyMap["product_id"]; ok {
+                    startKey["product_id"] = &types.AttributeValueMemberN{Value: v["N"]}
+                }
+                if v, ok := keyMap["category"]; ok {
+                    startKey["category"] = &types.AttributeValueMemberS{Value: v["S"]}
+                }
+                scanInput.ExclusiveStartKey = startKey
+            }
         }
     }
 
@@ -85,11 +98,18 @@ func getProductList(c *gin.Context) {
         return
     }
 
-    // Build next cursor from LastEvaluatedKey
+    // Build next cursor from LastEvaluatedKey — encode as base64 JSON
     var nextCursor string
     if result.LastEvaluatedKey != nil {
+        keyMap := map[string]map[string]string{}
         if v, ok := result.LastEvaluatedKey["product_id"].(*types.AttributeValueMemberN); ok {
-            nextCursor = v.Value
+            keyMap["product_id"] = map[string]string{"N": v.Value}
+        }
+        if v, ok := result.LastEvaluatedKey["category"].(*types.AttributeValueMemberS); ok {
+            keyMap["category"] = map[string]string{"S": v.Value}
+        }
+        if b, err := json.Marshal(keyMap); err == nil {
+            nextCursor = base64.StdEncoding.EncodeToString(b)
         }
     }
 
@@ -142,10 +162,21 @@ func getProductById(c *gin.Context) {
         return
     }
 
+    val, ok := syncProducts.Load(id)
+    if !ok {
+        c.JSON(http.StatusNotFound, gin.H{
+            "error":   "NOT_FOUND",
+            "message": fmt.Sprintf("product %d not found", id),
+        })
+        return
+    }
+    category := val.(Item).Category
+
     result, err := dynamoClient.GetItem(c.Request.Context(), &dynamodb.GetItemInput{
         TableName: aws.String(productsTable),
         Key: map[string]types.AttributeValue{
             "product_id": &types.AttributeValueMemberN{Value: strconv.Itoa(id)},
+            "category":   &types.AttributeValueMemberS{Value: category},
         },
     })
     if err != nil {
@@ -241,10 +272,21 @@ func updateProductById(c *gin.Context) {
         return
     }
 
+    existing, ok := syncProducts.Load(id)
+    if !ok {
+        c.JSON(http.StatusNotFound, gin.H{
+            "error":   "NOT_FOUND",
+            "message": fmt.Sprintf("product %d not found", id),
+        })
+        return
+    }
+    category := existing.(Item).Category
+
     updateInput := &dynamodb.UpdateItemInput{
         TableName: aws.String(productsTable),
         Key: map[string]types.AttributeValue{
             "product_id": &types.AttributeValueMemberN{Value: strconv.Itoa(id)},
+            "category":   &types.AttributeValueMemberS{Value: category},
         },
         UpdateExpression:          aws.String("SET " + strings.Join(setClauses, ", ")),
         ExpressionAttributeValues: exprValues,
@@ -272,16 +314,16 @@ func updateProductById(c *gin.Context) {
     }
 
     // Update syncProducts to keep in-memory search consistent
-    if val, ok := syncProducts.Load(id); ok {
-        existing := val.(Item)
-        if body.Name != nil     { existing.Name = *body.Name }
-        if body.Price != nil    { existing.Price = *body.Price }
-        if body.Category != nil { existing.Category = *body.Category }
-        if body.Color != nil    { existing.Color = *body.Color }
-        if body.Brand != nil    { existing.Brand = *body.Brand }
-        if body.IsActive != nil { existing.IsActive = *body.IsActive }
-        if body.ImageURL != nil { existing.ImageURL = *body.ImageURL }
-        syncProducts.Store(id, existing)
+    {
+        item := existing.(Item)
+        if body.Name != nil     { item.Name = *body.Name }
+        if body.Price != nil    { item.Price = *body.Price }
+        if body.Category != nil { item.Category = *body.Category }
+        if body.Color != nil    { item.Color = *body.Color }
+        if body.Brand != nil    { item.Brand = *body.Brand }
+        if body.IsActive != nil { item.IsActive = *body.IsActive }
+        if body.ImageURL != nil { item.ImageURL = *body.ImageURL }
+        syncProducts.Store(id, item)
     }
 
     c.IndentedJSON(http.StatusOK, gin.H{
@@ -308,11 +350,16 @@ func priceCheck(c *gin.Context) {
         return
     }
 
-    // Build keys for BatchGetItem
+    // Build keys for BatchGetItem — composite key requires both product_id and category
     keys := make([]map[string]types.AttributeValue, 0, len(body.ProductIDs))
     for _, id := range body.ProductIDs {
+        val, ok := syncProducts.Load(id)
+        if !ok {
+            continue
+        }
         keys = append(keys, map[string]types.AttributeValue{
             "product_id": &types.AttributeValueMemberN{Value: strconv.Itoa(id)},
+            "category":   &types.AttributeValueMemberS{Value: val.(Item).Category},
         })
     }
 

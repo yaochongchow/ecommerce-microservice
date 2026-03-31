@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"math"
 	"math/rand"
 	"strings"
 )
@@ -12,14 +14,14 @@ import (
 // struct tag (e.g. `json:"artist"`) specify what a field's name
 // should be when the struct's contents are serialized into JSON.
 type Item struct {
-	ID           int     `json:"product_id"`
-	Price       float64  `json:"price"`
-	Name         string  `json:"name"`
-	Category     string	 `json:"category"`
-	Color        string  `json:"color"`
-	Brand		 string  `json:"brand"`
-	IsActive     bool    `json:"is_active"`
-	ImageURL        string  `json:"image_url"`
+	ID       int     `json:"product_id" dynamodbav:"product_id"`
+	Price    float64 `json:"price"      dynamodbav:"price"`
+	Name     string  `json:"name"       dynamodbav:"name"`
+	Category string  `json:"category"   dynamodbav:"category"`
+	Color    string  `json:"color"      dynamodbav:"color"`
+	Brand    string  `json:"brand"      dynamodbav:"brand"`
+	IsActive bool    `json:"is_active"  dynamodbav:"is_active"`
+	ImageURL string  `json:"image_url"  dynamodbav:"image_url"`
 }
 
 var categoryToBrand = make(map[string][]string)
@@ -37,15 +39,15 @@ var productSet = make(map[string]struct{})
 
 // brandSpecificImages is the set of brand+subcategory combos that have dedicated images
 var brandSpecificImages = map[string]struct{}{
-	"nike_sneakers":        {},
-	"adidas_sneakers":      {},
-	"new_balance_sneakers": {},
-	"vans_sneakers":        {},
-	"apple_phone":          {},
-	"samsung_phone":        {},
-	"nike_jacket":          {},
-	"adidas_jacket":        {},
-	"north_face_jacket":    {},
+	"nike_sneakers":          {},
+	"adidas_sneakers":        {},
+	"new_balance_sneakers":   {},
+	"vans_sneakers":          {},
+	"apple_phone":            {},
+	"samsung_phone":          {},
+	"nike_jacket":            {},
+	"adidas_hoodie":          {},
+	"the_north_face_jacket":  {},
 }
 
 func getImageKey(brand, subcategory string) string {
@@ -69,6 +71,7 @@ func GenerateProducts(count int) map[int]Item {
 	categoryToBrand["Sunglasses"] = []string{"Gentle Monster", "Ray Ban","Oakley"}
 	categoryToBrand["Jewlery"] = []string{"Tiffany", "Cartier", "Bulgari", "Mejuri"}
 
+	categories["Macbook"] = []string{"Laptop"}
 	categories["Apparel"] = []string{"Jacket", "Sweater", "Beanie",
 									"Hoodie", "T-Shirt", "Shirt", 
 									"Shoes", "Hat", "Dress", "Backpack"}
@@ -76,9 +79,9 @@ func GenerateProducts(count int) map[int]Item {
 	categories["Body Care"] = []string{"Candle", "Body Oil", "Body Lotion", "Perfume"}
 	categories["Jewlery"] = []string{"Ring", "Necklace", "Bracelet"}
 
-	categoryToBrand["Apparel"] = []string{"Studio", "Align", "Softreme",
-										"Scuba", "Effortless", "Groove", 
-										"Everyday", "Define", "Wonder", "Wide Fit", "Petite Fit"}
+	adjectives["Apparel"] = []string{"Studio", "Align", "Softreme",
+									"Scuba", "Effortless", "Groove",
+									"Everyday", "Define", "Wonder", "Wide Fit", "Petite Fit"}
 	adjectives["Electronics"] = []string{"Pro", "Lite", "Mini", "Max", "New Generation"}
 	adjectives["Macbook"] = []string{"Pro", "Air", "Neo"}
 	adjectives["Sneakers"] = []string{"Training", "Running", "Everyday", "Trail", "High Performance"}
@@ -95,13 +98,11 @@ func GenerateProducts(count int) map[int]Item {
     }
 
 	for i := 1; i <= count; i++ {
-		// Random category
-		random_index := rand.Intn(len(categoryKeys))
-		choosenCategory := categoryKeys[random_index]
-
-		// Generate a unique item
-		var brand, adj, subcategory, color, name string
-		for {
+		// Generate a unique item, retrying with a different category if one is exhausted
+		var brand, adj, subcategory, color, name, choosenCategory string
+		found := false
+		for attempt := 0; attempt < len(categoryKeys)*50 && !found; attempt++ {
+			choosenCategory = categoryKeys[rand.Intn(len(categoryKeys))]
 			brand, adj, subcategory = GenerateItem(choosenCategory)
 			color = colors[rand.Intn(len(colors))]
 			displayCategory := choosenCategory
@@ -111,15 +112,19 @@ func GenerateProducts(count int) map[int]Item {
 			name = fmt.Sprintf("%s %s %s %s", brand, adj, color, displayCategory)
 			if _, exists := productSet[name]; !exists {
 				productSet[name] = struct{}{}
-				break
+				found = true
 			}
+		}
+		if !found {
+			log.Printf("Warning: could not generate unique product after many attempts, skipping item %d", i)
+			continue
 		}
 
 		var price float64
 		if choosenCategory == "Macbook" {
-			price = rand.Float64()*500 + 500
+			price = math.Round((rand.Float64()*500+500)*100) / 100
 		} else {
-			price = rand.Float64()*80 + 20
+			price = math.Round((rand.Float64()*80+20)*100) / 100
 		}
 
 		
@@ -129,7 +134,7 @@ func GenerateProducts(count int) map[int]Item {
 			displayCategory = subcategory
 		}
 		imageKey := getImageKey(brand, displayCategory)
-		imageURL := fmt.Sprintf("https://your-bucket.s3.us-east-1.amazonaws.com/products/%s.jpg", imageKey)
+		imageURL := ImageURL(imageKey)
 
 		item := Item{
 			ID:       i,
