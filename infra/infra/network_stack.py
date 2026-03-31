@@ -1,5 +1,6 @@
 from aws_cdk import (
     Stack,
+    CfnOutput,
     aws_ec2 as ec2,
     aws_elasticloadbalancingv2 as elbv2,
 )
@@ -54,5 +55,38 @@ class NetworkStack(Stack):
         self.alb.add_listener(
             "CartListener",
             port=8081,
+            protocol=elbv2.ApplicationProtocol.HTTP,
             default_target_groups=[self.cart_target_group],
+        )
+
+        dns = self.alb.load_balancer_dns_name
+
+        CfnOutput(self, "ProductServiceURL",
+            value=f"http://{dns}",
+            description="Product Service base URL (port 80)",
+        )
+        CfnOutput(self, "CartServiceURL",
+            value=f"http://{dns}:8081",
+            description="Cart Service base URL (port 8081)",
+        )
+        CfnOutput(self, "ExampleProductHealth",
+            value=f"curl http://{dns}/health",
+        )
+        CfnOutput(self, "ExampleProductList",
+            value=f"curl 'http://{dns}/products/?limit=5'",
+        )
+        CfnOutput(self, "ExampleProductSearch",
+            value=f"curl 'http://{dns}/products/search?q=nike'",
+        )
+        CfnOutput(self, "ExampleCartHealth",
+            value=f"curl http://{dns}:8081/health",
+        )
+        CfnOutput(self, "ExampleCartCreate",
+            value=f"curl -X POST http://{dns}:8081/cart/create/user1",
+        )
+        CfnOutput(self, "ExampleCartAddItem",
+            value=f'curl -X POST http://{dns}:8081/cart/add/user1 -H "Content-Type: application/json" -d \'{{"product_id": 1, "quantity": 2}}\'',
+        )
+        CfnOutput(self, "ExampleCartPriceCheck",
+            value=f"curl http://{dns}:8081/cart/user1/pricecheck",
         )

@@ -18,6 +18,10 @@ class DynamoStack(Stack):
                 name="product_id",
                 type=dynamodb.AttributeType.NUMBER,
             ),
+            sort_key=dynamodb.Attribute(
+                name="category",
+                type=dynamodb.AttributeType.STRING,
+            ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=RemovalPolicy.RETAIN,
         )

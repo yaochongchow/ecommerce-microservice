@@ -24,7 +24,6 @@ class CartServiceStack(Stack):
         redis_container = task_definition.add_container(
             "Redis",
             image=ecs.ContainerImage.from_registry("redis:alpine"),
-            port_mappings=[ecs.PortMapping(container_port=6379)],
             logging=ecs.LogDrivers.aws_logs(stream_prefix="cart-redis"),
         )
 
@@ -53,5 +52,10 @@ class CartServiceStack(Stack):
             desired_count=1,
         )
 
-        service.attach_to_application_target_group(network_stack.cart_target_group)
+        network_stack.cart_target_group.add_target(
+            service.load_balancer_target(
+                container_name="CartContainer",
+                container_port=8080,
+            )
+        )
         service.connections.allow_from(network_stack.alb, ec2.Port.tcp(8080))
