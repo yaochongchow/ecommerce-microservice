@@ -283,7 +283,11 @@ func deactivateCart(c *gin.Context) {
 	// Clean up shadow key on normal checkout (expiry listener won't need it)
 	rdb.Del(ctx, shadowKey(userID))
 
-	c.IndentedJSON(http.StatusOK, gin.H{"message": fmt.Sprintf("cart %s deactivated", cartID)})
+	c.IndentedJSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("cart %s deactivated", cartID),
+		"user_id": userID,
+		"cart_id": cartID,
+	})
 }
 
 // priceCheck fetches prices from the product service and calculates the cart total
@@ -334,16 +338,28 @@ func priceCheck(c *gin.Context) {
 		return
 	}
 
+	type PricedItem struct {
+		ProductID int     `json:"product_id"`
+		Quantity  int     `json:"quantity"`
+		Price     float64 `json:"price"`
+	}
+
 	total := 0.0
+	pricedItems := make([]PricedItem, 0, len(cart.Items))
 	for _, item := range cart.Items {
-		if price, ok := priceResp.Prices[strconv.Itoa(item.ProductID)]; ok {
-			total += price * float64(item.Quantity)
-		}
+		price := priceResp.Prices[strconv.Itoa(item.ProductID)]
+		total += price * float64(item.Quantity)
+		pricedItems = append(pricedItems, PricedItem{
+			ProductID: item.ProductID,
+			Quantity:  item.Quantity,
+			Price:     price,
+		})
 	}
 
 	c.IndentedJSON(http.StatusOK, gin.H{
-		"cart":   cart,
-		"prices": priceResp.Prices,
-		"total":  total,
+		"user_id": cart.UserID,
+		"cart_id": cart.CartID,
+		"items":   pricedItems,
+		"total":   total,
 	})
 }
