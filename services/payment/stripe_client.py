@@ -23,17 +23,20 @@ Why a circuit breaker for Stripe?
 
 import os
 import time
+import uuid
 from enum import Enum
-
-import stripe
 
 from shared.exceptions import CircuitBreakerOpenError, PaymentFailedError, RefundFailedError
 from shared.logger import get_logger
 
 logger = get_logger("stripe-client")
 
-# Stripe API key — stored in AWS Secrets Manager and injected as env var by SAM
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_placeholder")
+# Payment mode: "mock" auto-approves without calling Stripe, "live" uses real Stripe
+PAYMENT_MODE = os.environ.get("PAYMENT_MODE", "mock")
+
+if PAYMENT_MODE != "mock":
+    import stripe
+    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_placeholder")
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +236,11 @@ def create_charge(
     order_id: str = None,
     idempotency_key: str = None,
 ) -> dict:
+    if PAYMENT_MODE == "mock":
+        charge_id = f"ch_mock_{uuid.uuid4().hex[:12]}"
+        logger.info("Mock charge created", charge_id=charge_id, amount=amount, order_id=order_id)
+        return {"charge_id": charge_id, "amount": amount, "currency": currency, "status": "succeeded"}
+
     """Create a Stripe charge with retry and circuit breaker protection.
 
     Args:
@@ -289,6 +297,11 @@ def create_refund(
     reason: str = "requested_by_customer",
     order_id: str = None,
 ) -> dict:
+    if PAYMENT_MODE == "mock":
+        refund_id = f"re_mock_{uuid.uuid4().hex[:12]}"
+        logger.info("Mock refund created", refund_id=refund_id, charge_id=charge_id, order_id=order_id)
+        return {"refund_id": refund_id, "charge_id": charge_id, "amount": amount or 0, "status": "succeeded"}
+
     """Create a Stripe refund with retry and circuit breaker protection.
 
     Args:

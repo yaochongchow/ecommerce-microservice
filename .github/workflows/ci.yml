@@ -1,14 +1,17 @@
-name: CI
+name: CI/CD
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,3 +40,31 @@ jobs:
 
       - name: CDK synth
         run: npx cdk synth
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: CDK deploy
+        run: npx cdk deploy SharedStack OrderPaymentStack InventoryStack ShippingStack NotificationStack --require-approval never

@@ -21,7 +21,7 @@ idempotency), so we have double protection:
 
 from shared.logger import get_logger
 
-from .models import check_idempotency_key, store_idempotency_key
+from models import check_idempotency_key, store_idempotency_key
 
 logger = get_logger("payment-idempotency")
 

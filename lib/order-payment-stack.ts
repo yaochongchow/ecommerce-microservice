@@ -165,6 +165,7 @@ export class OrderPaymentStack extends cdk.Stack {
         PAYMENTS_TABLE: paymentsTable.tableName,
         IDEMPOTENCY_TABLE: idempotencyTable.tableName,
         EVENT_BUS_NAME: eventBusName,
+        PAYMENT_MODE: 'mock',
         STRIPE_SECRET_KEY: 'sk_test_placeholder',
         LOG_LEVEL: 'INFO',
       },

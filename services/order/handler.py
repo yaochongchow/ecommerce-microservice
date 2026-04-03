@@ -95,8 +95,28 @@ def _handle_cancel_order(order_id, correlation_id):
     current_status = order["status"]
     if current_status == "CANCELLED":
         return _response(409, {"error_code": "ORDER_ALREADY_CANCELLED", "message": f"Order {order_id} is already cancelled"})
+
+    # Post-confirmation cancellation — refund payment + release inventory
     if current_status == "CONFIRMED":
-        raise InvalidOrderStateError(order_id, current_status, "cancel")
+        from shared.events import publish_event, build_order_cancelled_event
+        update_order_status(order_id, "CANCELLED", cancellation_reason="User requested cancellation after confirmation")
+
+        # Trigger payment refund
+        publish_event("CompensatePayment", {
+            "orderId": order_id,
+            "reason": "User requested cancellation",
+        }, source="order-service", correlation_id=correlation_id)
+
+        # Trigger inventory release + notification
+        event_data = build_order_cancelled_event(
+            order_id=order_id,
+            user_id=order.get("user_id", ""),
+            reason="User requested cancellation after confirmation",
+        )
+        publish_event("OrderCanceled", event_data, source="order-service", correlation_id=correlation_id)
+
+        logger.info("Confirmed order cancelled — refund and inventory release initiated", order_id=order_id)
+        return _response(200, {"message": "Order cancelled — refund initiated", "order_id": order_id})
 
     if current_status in ("INVENTORY_RESERVED", "PAYMENT_PROCESSING"):
         from models import get_saga_state
