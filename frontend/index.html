@@ -963,9 +963,16 @@ function onSignedIn({ claims, idToken, accessToken }) {
   document.getElementById("signout-btn").style.display = "";
   document.getElementById("orders-nav").style.display  = "";
   document.getElementById("profile-nav").style.display = "";
+
+  // Persist session to localStorage (survives page refresh, expires in 1 hour)
+  localStorage.setItem("session", JSON.stringify({
+    user: state.user, idToken, accessToken,
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  }));
 }
 
 function signOut() {
+  localStorage.removeItem("session");
   state = { user: null, idToken: null, accessToken: null, cart: { items: [], subtotal: 0 }, products: state.products, filtered: state.filtered, page: 1 };
   recalcCart();
   document.getElementById("auth-btn").style.display    = "";
@@ -1028,6 +1035,16 @@ function toast(msg) {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
+// Restore session from localStorage (persists across page refresh, 1 hour TTL)
+try {
+  const saved = JSON.parse(localStorage.getItem("session"));
+  if (saved && saved.expiresAt > Date.now()) {
+    onSignedIn({ claims: { sub: saved.user.sub, email: saved.user.email, given_name: saved.user.firstName, family_name: saved.user.lastName }, idToken: saved.idToken, accessToken: saved.accessToken });
+  } else {
+    localStorage.removeItem("session");
+  }
+} catch {}
+
 loadProducts();
 </script>
 </body>
