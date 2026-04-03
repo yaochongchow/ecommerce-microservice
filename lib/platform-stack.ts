@@ -77,12 +77,7 @@ export class PlatformStack extends cdk.Stack {
       ],
     });
 
-    new s3deploy.BucketDeployment(this, 'FrontendDeploy', {
-      sources: [s3deploy.Source.asset('frontend')],
-      destinationBucket: frontendBucket,
-      distribution,
-      distributionPaths: ['/*'],
-    });
+    // BucketDeployment is declared later (after userPool/httpApi) so CDK tokens resolve correctly
 
     // ── 4. Cognito ────────────────────────────────────────────────────────────
     const preSignUpFn = makeFn('PreSignUpFn', 'pre-signup', '/aws/lambda/ecomm-pre-signup', {});
@@ -312,5 +307,23 @@ export class PlatformStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserPoolId',         { value: userPool.userPoolId });
     new cdk.CfnOutput(this, 'UserPoolClientId',   { value: userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'FrontendBucketName', { value: frontendBucket.bucketName });
+
+    // ── Frontend deployment (after all tokens are defined) ────────────────────
+    const configJs = `window.__CONFIG__ = ${JSON.stringify({
+      apiUrl:     httpApi.apiEndpoint,
+      userPoolId: userPool.userPoolId,
+      clientId:   userPoolClient.userPoolClientId,
+      region:     this.region,
+    })};`;
+
+    new s3deploy.BucketDeployment(this, 'FrontendDeploy', {
+      sources: [
+        s3deploy.Source.asset('frontend'),
+        s3deploy.Source.data('config.js', configJs),
+      ],
+      destinationBucket: frontendBucket,
+      distribution,
+      distributionPaths: ['/*'],
+    });
   }
 }
