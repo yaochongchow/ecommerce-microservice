@@ -41,3 +41,5 @@ const notification = new NotificationStack(app, 'NotificationStack', { env });
 [orderPayment, productCart, platform, inventory, shipping, notification]
   .forEach(s => s.addDependency(shared));
 platform.addDependency(orderPayment);
+platform.addDependency(productCart);
+platform.addDependency(inventory);

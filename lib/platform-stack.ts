@@ -252,6 +252,7 @@ export class PlatformStack extends cdk.Stack {
       ['/api/me',               apigwv2.HttpMethod.PUT,    true,  'user'],
       ['/api/me/cart',          apigwv2.HttpMethod.GET,    true,  'user'],
       ['/api/me/cart',          apigwv2.HttpMethod.POST,   true,  'user'],
+      ['/api/me/cart',          apigwv2.HttpMethod.DELETE, true,  'user'],
       ['/api/me/cart/{itemId}', apigwv2.HttpMethod.DELETE, true,  'user'],
       ['/api/me/orders',        apigwv2.HttpMethod.GET,    true,  'user'],
       ['/api/products',         apigwv2.HttpMethod.GET,    false, 'bff'],

@@ -355,7 +355,7 @@ let state = {
   stock: {},
   page: 1,
 };
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 40;
 
 
 // ── ROUTING ───────────────────────────────────────────────────────────────────
@@ -669,6 +669,7 @@ async function placeOrder() {
     });
     state.cart = { items: [], subtotal: 0 };
     recalcCart();
+    apiCall("DELETE", "/api/me/cart").catch(() => {});
     toast("Order placed! ✓");
     showPage("orders");
   } catch {
@@ -694,7 +695,7 @@ function fmtExpiry(el) {
 async function loadOrders() {
   const el = document.getElementById("orders-list");
   const detailEl = document.getElementById("order-detail");
-  detailEl.className = "order-detail"; // hide detail
+  detailEl.className = "order-detail";
   detailEl.innerHTML = "";
   if (!state.idToken) { el.innerHTML = `<p style="color:var(--muted)">Sign in to view your orders.</p>`; return; }
   el.innerHTML = `<p style="color:var(--muted)">Loading…</p>`;
@@ -733,7 +734,6 @@ async function viewOrder(orderId) {
     const address = order.shipping_address || order.shippingAddress || "";
     const addrStr = typeof address === "object" ? Object.values(address).filter(Boolean).join(", ") : address;
 
-    // Fetch product details for each item (name, image)
     const productDetails = {};
     await Promise.all(items.map(async (i) => {
       const pid = i.product_id || i.productId;
@@ -779,7 +779,7 @@ async function viewOrder(orderId) {
       ${order.payment_id ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">Payment: ${order.payment_id}</div>` : ""}
       ${order.charge_id ? `<div style="font-size:12px;color:var(--muted)">Charge: ${order.charge_id}</div>` : ""}
     `;
-  } catch (e) {
+  } catch {
     detailEl.innerHTML = `
       <span class="order-detail-back" onclick="closeOrderDetail()">← Back to orders</span>
       <p style="color:var(--muted)">Could not load order details.</p>
@@ -950,7 +950,9 @@ async function confirmCode() {
   } catch(e) { showAlert(e.message, "error"); }
 }
 
-function onSignedIn({ claims, idToken, accessToken }) {
+async function onSignedIn({ claims, idToken, accessToken }) {
+  const preLoginItems = state.cart.items.slice();
+
   state.user = {
     sub:       claims.sub,
     email:     claims.email,
@@ -959,21 +961,59 @@ function onSignedIn({ claims, idToken, accessToken }) {
   };
   state.idToken     = idToken;
   state.accessToken = accessToken;
+  localStorage.setItem("idToken", idToken);
+  localStorage.setItem("accessToken", accessToken);
   document.getElementById("auth-btn").style.display    = "none";
   document.getElementById("signout-btn").style.display = "";
   document.getElementById("orders-nav").style.display  = "";
   document.getElementById("profile-nav").style.display = "";
 
-  // Persist session to localStorage (survives page refresh, expires in 1 hour)
-  localStorage.setItem("session", JSON.stringify({
-    user: state.user, idToken, accessToken,
-    expiresAt: Date.now() + 60 * 60 * 1000,
-  }));
+  // Load persisted cart from backend, then merge any pre-login items
+  try {
+    const data = await apiCall("GET", "/api/me/cart");
+    const backendItems = data.items || [];
+    // Start from backend cart
+    state.cart.items = backendItems.map(i => ({
+      productId: i.productId,
+      name:      i.name,
+      price:     i.price,
+      quantity:  i.quantity,
+      image_url: i.imageUrl || "",
+    }));
+    // Merge pre-login items not already in backend cart
+    for (const item of preLoginItems) {
+      const existing = state.cart.items.find(i => i.productId === item.productId);
+      if (existing) {
+        existing.quantity += item.quantity;
+        apiCall("POST", "/api/me/cart", {
+          productId: existing.productId, name: existing.name,
+          price: existing.price, quantity: item.quantity,
+        }).catch(() => {});
+      } else {
+        state.cart.items.push(item);
+        apiCall("POST", "/api/me/cart", {
+          productId: item.productId, name: item.name,
+          price: item.price, quantity: item.quantity,
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // If fetch fails, keep pre-login items and sync them
+    state.cart.items = preLoginItems;
+    for (const item of preLoginItems) {
+      apiCall("POST", "/api/me/cart", {
+        productId: item.productId, name: item.name,
+        price: item.price, quantity: item.quantity,
+      }).catch(() => {});
+    }
+  }
+  recalcCart();
 }
 
 function signOut() {
-  localStorage.removeItem("session");
   state = { user: null, idToken: null, accessToken: null, cart: { items: [], subtotal: 0 }, products: state.products, filtered: state.filtered, page: 1 };
+  localStorage.removeItem("idToken");
+  localStorage.removeItem("accessToken");
   recalcCart();
   document.getElementById("auth-btn").style.display    = "";
   document.getElementById("signout-btn").style.display = "none";
@@ -1035,16 +1075,24 @@ function toast(msg) {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-// Restore session from localStorage (persists across page refresh, 1 hour TTL)
-try {
-  const saved = JSON.parse(localStorage.getItem("session"));
-  if (saved && saved.expiresAt > Date.now()) {
-    onSignedIn({ claims: { sub: saved.user.sub, email: saved.user.email, given_name: saved.user.firstName, family_name: saved.user.lastName }, idToken: saved.idToken, accessToken: saved.accessToken });
-  } else {
-    localStorage.removeItem("session");
+(function restoreSession() {
+  const idToken = localStorage.getItem("idToken");
+  const accessToken = localStorage.getItem("accessToken");
+  if (idToken) {
+    try {
+      const claims = parseJwt(idToken);
+      if (claims.exp * 1000 > Date.now()) {
+        onSignedIn({ claims, idToken, accessToken });
+      } else {
+        localStorage.removeItem("idToken");
+        localStorage.removeItem("accessToken");
+      }
+    } catch(e) {
+      localStorage.removeItem("idToken");
+      localStorage.removeItem("accessToken");
+    }
   }
-} catch {}
-
+})();
 loadProducts();
 </script>
 </body>

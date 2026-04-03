@@ -3,6 +3,7 @@
  * Handles:
  *   GET/PUT  /api/me              — user profile
  *   GET/POST /api/me/cart         — cart operations
+ *   DELETE   /api/me/cart         — clear entire cart
  *   DELETE   /api/me/cart/{id}    — remove cart item
  *   GET      /api/me/orders       — order history
  *   EventBridge: order.created / order.confirmed / order.cancelled
@@ -11,6 +12,7 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
+  DeleteCommand,
   GetCommand,
   PutCommand,
   UpdateCommand,
@@ -178,6 +180,11 @@ async function upsertCart(userId: string, body: Record<string, unknown>, cid: st
   return response(200, { message: "Cart updated", itemCount: items.length, subtotal }, cid);
 }
 
+async function clearCart(userId: string, cid: string) {
+  await dynamo.send(new DeleteCommand({ TableName: CARTS_TABLE, Key: { userId } }));
+  return response(200, { message: "Cart cleared" }, cid);
+}
+
 async function deleteCartItem(userId: string, itemId: string, cid: string) {
   const res = await dynamo.send(new GetCommand({ TableName: CARTS_TABLE, Key: { userId } }));
   if (!res.Item) return response(404, { message: "Cart not found" }, cid);
@@ -284,6 +291,8 @@ export const handler = async (event: ApiEvent | EBEvent): Promise<unknown> => {
       return getCart(userId!, cid);
     case "POST /api/me/cart":
       return upsertCart(userId!, body, cid);
+    case "DELETE /api/me/cart":
+      return clearCart(userId!, cid);
     case "DELETE /api/me/cart/{itemId}":
       return deleteCartItem(userId!, pathParams.itemId ?? "", cid);
     case "GET /api/me/orders":
