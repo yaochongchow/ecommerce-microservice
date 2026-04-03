@@ -12,6 +12,8 @@ import * as ddb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as path from 'path';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -36,27 +38,23 @@ export class PlatformStack extends cdk.Stack {
         retention: logs.RetentionDays.TWO_WEEKS,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
-      return new lambda.Function(this, id, {
+      return new NodejsFunction(this, id, {
+        entry: path.join(__dirname, `../lambda/${folder}/index.ts`),
+        handler: 'handler',
         runtime: lambda.Runtime.NODEJS_20_X,
-        code: lambda.Code.fromAsset(`lambda/${folder}`),
-        handler: 'index.handler',
         memorySize,
         timeout: cdk.Duration.seconds(29),
         tracing: lambda.Tracing.ACTIVE,
         logGroup,
-        layers: [sharedLayer],
+        bundling: {
+          minify: true,
+          externalModules: ['@aws-sdk/*'],
+        },
         environment: { ...env, LOG_LEVEL: 'INFO' },
       });
     };
 
-    // ── 2. Shared Lambda layer ────────────────────────────────────────────────
-    const sharedLayer = new lambda.LayerVersion(this, 'SharedLayer', {
-      code: lambda.Code.fromAsset('lambda/layers/shared'),
-      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
-      description: 'Shared utilities: logger, event publisher, error types',
-    });
-
-    // ── 3. S3 + CloudFront ────────────────────────────────────────────────────
+    // ── 2. S3 + CloudFront ────────────────────────────────────────────────────
     const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
@@ -87,15 +85,15 @@ export class PlatformStack extends cdk.Stack {
     });
 
     // ── 4. Cognito ────────────────────────────────────────────────────────────
+    const preSignUpFn = makeFn('PreSignUpFn', 'pre-signup', '/aws/lambda/ecomm-pre-signup', {});
     const userPool = new cognito.UserPool(this, 'UserPool', {
       selfSignUpEnabled: true,
       signInAliases: { email: true },
-      autoVerify: { email: true },
       passwordPolicy: {
         minLength: 8,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireDigits: true,
+        requireLowercase: false,
+        requireUppercase: false,
+        requireDigits: false,
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
@@ -173,6 +171,7 @@ export class PlatformStack extends cdk.Stack {
       USERS_TABLE: usersTable.tableName,
     });
     usersTable.grantWriteData(postConfirmFn);
+    userPool.addTrigger(cognito.UserPoolOperation.PRE_SIGN_UP, preSignUpFn);
     userPool.addTrigger(cognito.UserPoolOperation.POST_CONFIRMATION, postConfirmFn);
 
     // ── 9. User service Lambda ────────────────────────────────────────────────
@@ -197,17 +196,23 @@ export class PlatformStack extends cdk.Stack {
     });
 
     // ── 10. BFF Lambda ────────────────────────────────────────────────────────
-    const orderApiFnName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-name');
+    const orderApiFnName    = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-name');
+    const productServiceUrl = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/product-service-url');
+    const inventoryTableName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/inventory-table-name');
+    const inventoryTable = ddb.Table.fromTableName(this, 'InventoryTableRef', inventoryTableName);
 
     const bffFn = makeFn('BffFn', 'bff', '/aws/lambda/ecomm-bff', {
       EVENT_BUS_NAME:          eventBusName,
       USER_POOL_ID:            userPool.userPoolId,
       USER_FN_NAME:            userFn.functionName,
       ORDER_API_FN_NAME:       orderApiFnName,
+      PRODUCT_SERVICE_URL:     productServiceUrl,
+      INVENTORY_TABLE:         inventoryTableName,
       POWERTOOLS_SERVICE_NAME: 'bff',
     }, 1024);
     userFn.grantInvoke(bffFn);
     eventBus.grantPutEventsTo(bffFn);
+    inventoryTable.grantReadData(bffFn);
 
     const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
     const orderApiFn = lambda.Function.fromFunctionAttributes(this, 'OrderApiFn', {
@@ -257,6 +262,7 @@ export class PlatformStack extends cdk.Stack {
       ['/api/products',         apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/products/{id}',    apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/search',           apigwv2.HttpMethod.GET,    false, 'bff'],
+      ['/api/inventory',        apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/orders',           apigwv2.HttpMethod.POST,   true,  'bff'],
       ['/api/orders/{id}',      apigwv2.HttpMethod.GET,    true,  'bff'],
     ];
