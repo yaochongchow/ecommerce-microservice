@@ -20,8 +20,8 @@ from shared.events import (
 )
 from shared.logger import get_logger
 
-from . import compensation
-from .models import get_order, get_saga_state, transition_saga_state, update_order_status
+import compensation
+from models import get_order, get_saga_state, transition_saga_state, update_order_status
 
 logger = get_logger("order-service-saga")
 

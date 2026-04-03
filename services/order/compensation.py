@@ -10,7 +10,7 @@ from shared.events import (
     publish_event,
 )
 from shared.logger import get_logger
-from .models import get_saga_state, transition_saga_state, update_order_status
+from models import get_saga_state, transition_saga_state, update_order_status
 
 logger = get_logger("order-service-compensation")
 
@@ -45,7 +45,7 @@ def handle_inventory_released(order_id, correlation_id=None):
     )
     update_order_status(order_id, "CANCELLED", cancellation_reason="Compensation completed — inventory released")
 
-    from .models import get_order
+    from models import get_order
     order = get_order(order_id)
     event_data = build_order_cancelled_event(
         order_id=order_id,

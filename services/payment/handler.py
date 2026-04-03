@@ -18,9 +18,9 @@ from shared.events import build_payment_completed_event, build_payment_failed_ev
 from shared.exceptions import CircuitBreakerOpenError, DuplicatePaymentError, PaymentFailedError
 from shared.logger import get_logger
 
-from .idempotency import process_with_idempotency
-from .models import create_payment, get_payment_by_order, update_payment_refund
-from .stripe_client import create_charge, create_refund
+from idempotency import process_with_idempotency
+from models import create_payment, get_payment_by_order, update_payment_refund
+from stripe_client import create_charge, create_refund
 
 logger = get_logger("payment-service")
 

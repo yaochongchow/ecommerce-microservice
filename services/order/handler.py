@@ -12,9 +12,9 @@ from common.event_utils import unwrap_event, get_detail_type, get_detail
 from shared.exceptions import BaseServiceError, InvalidOrderStateError, OrderNotFoundError
 from shared.logger import get_logger
 
-from . import saga
-from .compensation import handle_inventory_released
-from .models import create_order, create_saga_state, get_order, update_order_status
+import saga
+from compensation import handle_inventory_released
+from models import create_order, create_saga_state, get_order, update_order_status
 
 logger = get_logger("order-service")
 
@@ -99,10 +99,10 @@ def _handle_cancel_order(order_id, correlation_id):
         raise InvalidOrderStateError(order_id, current_status, "cancel")
 
     if current_status in ("INVENTORY_RESERVED", "PAYMENT_PROCESSING"):
-        from .models import get_saga_state
+        from models import get_saga_state
         saga_state = get_saga_state(order_id)
-        from . import compensation
-        from .models import transition_saga_state
+        import compensation
+        from models import transition_saga_state
         transition_saga_state(order_id=order_id, from_state=saga_state["current_state"], to_state="PAYMENT_FAILED", reason="User requested cancellation")
         compensation.compensate_inventory(order_id=order_id, saga_state=saga_state, reason="User requested cancellation", correlation_id=correlation_id)
         return _response(200, {"message": "Cancellation initiated", "order_id": order_id})
