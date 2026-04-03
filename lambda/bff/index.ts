@@ -9,25 +9,18 @@
  *   POST /api/orders       — creates order via M2 order service
  *   GET  /api/orders/:id   — order lookup via M2
  */
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
 const EVENT_BUS_NAME = process.env.EVENT_BUS_NAME!;
 const ORDER_API_FN_NAME = process.env.ORDER_API_FN_NAME;
-const eb = new EventBridgeClient({});
+const PRODUCT_SERVICE_URL = process.env.PRODUCT_SERVICE_URL!;
+const INVENTORY_TABLE     = process.env.INVENTORY_TABLE!;
+const eb          = new EventBridgeClient({});
 const lambdaClient = new LambdaClient({});
-
-// Demo catalog — will be replaced by M3 product service (ECS)
-const PRODUCTS = [
-  { id: 'p1', name: 'Wireless Headphones',  desc: 'Premium noise-cancelling over-ear headphones', price: 89.99,  emoji: '🎧', stock: 14, category: 'Electronics' },
-  { id: 'p2', name: 'Mechanical Keyboard',  desc: 'TKL layout with tactile switches and RGB',     price: 129.99, emoji: '⌨️', stock: 7,  category: 'Electronics' },
-  { id: 'p3', name: 'Running Shoes',        desc: 'Lightweight trail runners for all terrains',    price: 74.99,  emoji: '👟', stock: 22, category: 'Apparel'     },
-  { id: 'p4', name: 'Coffee Grinder',       desc: 'Burr grinder with 15 grind settings',           price: 49.99,  emoji: '☕', stock: 9,  category: 'Kitchen'     },
-  { id: 'p5', name: 'Yoga Mat',             desc: 'Extra thick non-slip mat with carry strap',     price: 34.99,  emoji: '🧘', stock: 31, category: 'Fitness'     },
-  { id: 'p6', name: 'Smart Watch',          desc: 'Health tracking with 7-day battery life',       price: 199.99, emoji: '⌚', stock: 5,  category: 'Electronics' },
-  { id: 'p7', name: 'Backpack',             desc: '30L waterproof daypack with laptop sleeve',     price: 59.99,  emoji: '🎒', stock: 18, category: 'Accessories' },
-  { id: 'p8', name: 'Desk Lamp',            desc: 'LED lamp with wireless charging base',           price: 44.99,  emoji: '💡', stock: 12, category: 'Home'        },
-];
+const dynamo       = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 interface ApiEvent {
   routeKey: string;
@@ -44,23 +37,42 @@ const getCid = (e: ApiEvent) => e.headers?.['x-correlation-id'] ?? e.headers?.['
 const getUid = (e: ApiEvent) => e.requestContext?.authorizer?.jwt?.claims?.['sub'];
 const getBody = (e: ApiEvent) => { try { return e.body ? JSON.parse(e.body) : {}; } catch { return null; } };
 
-function getProducts(correlationId: string) {
-  return ok({ products: PRODUCTS, count: PRODUCTS.length }, correlationId);
+async function getInventory(correlationId: string) {
+  const stock: Record<string, number> = {};
+  let lastKey: Record<string, any> | undefined;
+  do {
+    const res = await dynamo.send(new ScanCommand({
+      TableName: INVENTORY_TABLE,
+      ProjectionExpression: 'productId, available',
+      ExclusiveStartKey: lastKey,
+    }));
+    for (const item of res.Items ?? []) {
+      stock[item.productId] = Number(item.available ?? 0);
+    }
+    lastKey = res.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastKey);
+  return ok({ stock }, correlationId);
 }
 
-function getProduct(id: string, correlationId: string) {
-  const p = PRODUCTS.find(x => x.id === id);
-  return p ? ok(p, correlationId) : err(404, 'Product not found', correlationId);
+async function getProducts(qs: Record<string, string>, correlationId: string) {
+  const params = new URLSearchParams();
+  if (qs.limit)  params.set('limit',  qs.limit);
+  if (qs.cursor) params.set('cursor', qs.cursor);
+  const res = await fetch(`${PRODUCT_SERVICE_URL}/products/?${params}`);
+  if (!res.ok) return err(res.status, 'Product service unavailable', correlationId);
+  return ok(await res.json(), correlationId);
 }
 
-function searchProducts(q: string, correlationId: string) {
-  const lower = q.toLowerCase();
-  const results = PRODUCTS.filter(p =>
-    p.name.toLowerCase().includes(lower) ||
-    p.category.toLowerCase().includes(lower) ||
-    p.desc.toLowerCase().includes(lower),
-  );
-  return ok({ results, count: results.length, query: q }, correlationId);
+async function getProduct(id: string, correlationId: string) {
+  const res = await fetch(`${PRODUCT_SERVICE_URL}/products/${id}`);
+  if (!res.ok) return err(res.status, res.status === 404 ? 'Product not found' : 'Product service unavailable', correlationId);
+  return ok(await res.json(), correlationId);
+}
+
+async function searchProducts(q: string, correlationId: string) {
+  const res = await fetch(`${PRODUCT_SERVICE_URL}/products/search?q=${encodeURIComponent(q)}`);
+  if (!res.ok) return err(res.status, 'Product service unavailable', correlationId);
+  return ok(await res.json(), correlationId);
 }
 
 async function createOrder(userId: string, payload: Record<string, unknown>, correlationId: string) {
@@ -158,9 +170,11 @@ export const handler = async (event: ApiEvent): Promise<unknown> => {
     case 'GET /health':
       return ok({ status: 'ok', service: 'bff', ts: Date.now() }, correlationId);
     case 'GET /api/products':
-      return getProducts(correlationId);
+      return getProducts(qs, correlationId);
     case 'GET /api/products/{id}':
       return getProduct(params.id ?? '', correlationId);
+    case 'GET /api/inventory':
+      return getInventory(correlationId);
     case 'GET /api/search':
       return qs.q ? searchProducts(qs.q, correlationId) : err(400, 'Query param ?q= required', correlationId);
     case 'POST /api/orders':

@@ -31,7 +31,7 @@
   .product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-top:16px}
   .product-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:box-shadow .15s}
   .product-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.1)}
-  .product-img{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:48px}
+  .product-img{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--bg);display:block}
   .product-body{padding:12px}
   .product-name{font-weight:600;font-size:15px;margin-bottom:4px}
   .product-desc{font-size:13px;color:var(--muted);margin-bottom:8px;line-height:1.4}
@@ -52,7 +52,7 @@
   .cart-empty{text-align:center;padding:60px 0;color:var(--muted)}
   .cart-empty .icon{font-size:48px;margin-bottom:12px}
   .cart-item{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)}
-  .cart-item-img{width:56px;height:56px;border-radius:8px;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0}
+  .cart-item-img{width:56px;height:56px;border-radius:8px;object-fit:cover;flex-shrink:0;background:var(--bg)}
   .cart-item-info{flex:1}
   .cart-item-name{font-weight:600;font-size:14px}
   .cart-item-price{font-size:13px;color:var(--muted);margin-top:2px}
@@ -88,9 +88,20 @@
   .alert.error{background:#fee2e2;color:#991b1b;display:block}
   .alert.success{background:#dcfce7;color:#166534;display:block}
 
-  /* SEARCH */
-  .search-bar{display:flex;gap:8px;margin-bottom:16px}
+  /* SEARCH + SORT */
+  .search-bar{display:flex;gap:8px;margin-bottom:8px}
   .search-bar input{flex:1}
+  .sort-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;font-size:14px;color:var(--muted);flex-wrap:wrap}
+  .sort-bar label{display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .sort-bar select{padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text);cursor:pointer}
+  .sort-bar select:focus{outline:none;border-color:var(--accent)}
+
+  /* PAGINATION */
+  .pagination{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:24px;flex-wrap:wrap}
+  .page-btn{min-width:36px;height:36px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .page-btn:hover{background:var(--bg)}
+  .page-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+  .page-btn:disabled{opacity:.4;cursor:default}
 
   /* TOAST */
   #toast{position:fixed;bottom:24px;right:24px;background:#1a1a18;color:#fff;padding:12px 18px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:999}
@@ -100,6 +111,18 @@
   .page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
   .page-header h1{font-size:22px;font-weight:700}
   .page-sub{font-size:14px;color:var(--muted);margin-bottom:16px}
+
+  /* PAYMENT PAGE */
+  .payment-layout{display:grid;grid-template-columns:1fr 380px;gap:24px;align-items:start}
+  @media(max-width:780px){.payment-layout{grid-template-columns:1fr}}
+  .payment-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px}
+  .payment-card h2{font-size:16px;font-weight:700;margin-bottom:16px}
+  .payment-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card-input{font-family:'Segoe UI',system-ui,sans-serif;letter-spacing:.05em}
+  .pay-line{display:flex;justify-content:space-between;font-size:14px;padding:6px 0;border-bottom:1px solid var(--border)}
+  .pay-line:last-child{border:none;font-weight:700;font-size:16px;padding-top:12px}
+  .pay-item-img{width:48px;height:48px;object-fit:cover;border-radius:6px;background:var(--bg);flex-shrink:0}
+  .secure-badge{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:12px;justify-content:center}
 </style>
 </head>
 <body>
@@ -121,6 +144,28 @@
   <div class="search-bar">
     <input id="search-input" placeholder="Search products..." oninput="filterProducts(this.value)"/>
   </div>
+  <div class="sort-bar">
+    <label>Sort by
+      <select id="sort-select" onchange="applySort()">
+        <option value="">Featured</option>
+        <option value="price-asc">Price: Low to High</option>
+        <option value="price-desc">Price: High to Low</option>
+        <option value="name-asc">Name: A–Z</option>
+        <option value="brand-asc">Brand: A–Z</option>
+        <option value="category-asc">Category: A–Z</option>
+      </select>
+    </label>
+    <label>Brand
+      <select id="brand-select" onchange="applyFilters()">
+        <option value="">All brands</option>
+      </select>
+    </label>
+    <label>Category
+      <select id="category-select" onchange="applyFilters()">
+        <option value="">All categories</option>
+      </select>
+    </label>
+  </div>
   <div class="product-grid" id="product-grid"></div>
 </div>
 
@@ -128,6 +173,66 @@
 <div id="page-cart" class="page">
   <div class="page-header"><h1>Your cart</h1></div>
   <div id="cart-contents"></div>
+</div>
+
+<!-- PAYMENT PAGE -->
+<div id="page-payment" class="page">
+  <div class="page-header">
+    <h1>Checkout</h1>
+    <button class="btn btn-ghost btn-sm" onclick="showPage('cart')">← Back to cart</button>
+  </div>
+  <div class="payment-layout">
+
+    <!-- Left: payment form -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+
+      <!-- Shipping -->
+      <div class="payment-card">
+        <h2>Shipping address</h2>
+        <div class="form-group" style="margin:0">
+          <input id="pay-address" placeholder="123 Main St, City, State, ZIP" style="width:100%"/>
+        </div>
+      </div>
+
+      <!-- Card details -->
+      <div class="payment-card">
+        <h2>Payment details</h2>
+        <div class="form-group">
+          <label>Card number</label>
+          <input id="pay-card-num" class="card-input" placeholder="1234 5678 9012 3456" maxlength="19"
+            oninput="fmtCard(this)"/>
+        </div>
+        <div class="payment-row">
+          <div class="form-group" style="margin:0">
+            <label>Expiry</label>
+            <input id="pay-expiry" class="card-input" placeholder="MM / YY" maxlength="7"
+              oninput="fmtExpiry(this)"/>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>CVV</label>
+            <input id="pay-cvv" class="card-input" placeholder="•••" maxlength="4" type="password"/>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:12px;margin-bottom:0">
+          <label>Name on card</label>
+          <input id="pay-name" placeholder="Alex Smith"/>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" style="width:100%;padding:14px;font-size:16px" onclick="placeOrder()" id="place-order-btn">
+        Place order
+      </button>
+      <div class="secure-badge">🔒 Secured · Orders processed by ShopCloud</div>
+    </div>
+
+    <!-- Right: order summary -->
+    <div class="payment-card" style="position:sticky;top:72px">
+      <h2>Order summary</h2>
+      <div id="pay-items" style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px"></div>
+      <div id="pay-totals"></div>
+    </div>
+
+  </div>
 </div>
 
 <!-- ORDERS PAGE -->
@@ -141,14 +246,28 @@
 <div id="page-profile" class="page">
   <div class="page-header"><h1>Your profile</h1></div>
   <p class="page-sub">Manage your account</p>
-  <div class="profile-card">
-    <div class="profile-avatar" id="profile-avatar">?</div>
-    <div class="form-group"><label>First name</label><input id="pf-first" placeholder="First name"/></div>
-    <div class="form-group"><label>Last name</label><input id="pf-last" placeholder="Last name"/></div>
-    <div class="form-group"><label>Email</label><input id="pf-email" type="email" disabled style="opacity:.6"/></div>
-    <div class="form-group"><label>Phone</label><input id="pf-phone" placeholder="+1 555 000 0000"/></div>
-    <div class="form-group"><label>Address</label><input id="pf-address" placeholder="123 Main St, City"/></div>
-    <button class="btn btn-primary" onclick="saveProfile()">Save changes</button>
+  <div style="display:flex;flex-direction:column;gap:16px;max-width:480px">
+    <!-- Account info (read-only) -->
+    <div class="profile-card" id="profile-account" style="display:none">
+      <div class="profile-avatar" id="profile-avatar">?</div>
+      <div style="font-size:13px;color:var(--muted);display:grid;gap:6px">
+        <div><span style="font-weight:500;color:var(--text)" id="pf-display-name"></span></div>
+        <div>Email: <span id="pf-display-email"></span></div>
+        <div>User ID: <span id="pf-display-id" style="font-family:monospace;font-size:12px"></span></div>
+        <div id="pf-display-since"></div>
+        <div id="pf-display-login"></div>
+      </div>
+    </div>
+    <!-- Editable fields -->
+    <div class="profile-card">
+      <div style="font-weight:600;margin-bottom:14px">Contact details</div>
+      <div class="form-group"><label>First name</label><input id="pf-first" placeholder="First name"/></div>
+      <div class="form-group"><label>Last name</label><input id="pf-last" placeholder="Last name"/></div>
+      <div class="form-group"><label>Email</label><input id="pf-email" type="email" disabled style="opacity:.6"/></div>
+      <div class="form-group"><label>Phone</label><input id="pf-phone" placeholder="+1 555 000 0000"/></div>
+      <div class="form-group"><label>Shipping address</label><input id="pf-address" placeholder="123 Main St, City"/></div>
+      <button class="btn btn-primary" onclick="saveProfile()">Save changes</button>
+    </div>
   </div>
 </div>
 
@@ -157,7 +276,7 @@
   <div class="modal">
     <h2>Welcome</h2>
     <p class="modal-sub">Sign in or create an account</p>
-    <div class="modal-tabs">
+    <div class="modal-tabs" id="auth-tabs">
       <button class="modal-tab active" id="tab-signin" onclick="switchTab('signin')">Sign in</button>
       <button class="modal-tab" id="tab-signup" onclick="switchTab('signup')">Sign up</button>
     </div>
@@ -171,10 +290,34 @@
       <div class="form-group"><label>First name</label><input id="su-first" placeholder="Alex"/></div>
       <div class="form-group"><label>Last name</label><input id="su-last" placeholder="Smith"/></div>
       <div class="form-group"><label>Email</label><input id="su-email" type="email" placeholder="you@example.com"/></div>
-      <div class="form-group"><label>Password</label><input id="su-pass" type="password" placeholder="Min 8 chars"/></div>
+      <div class="form-group"><label>Password</label><input id="su-pass" type="password" placeholder="Min 8 characters"/></div>
       <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="signUp()">Create account</button>
     </div>
+    <div id="form-verify" style="display:none">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Enter the 6-digit code sent to your email.</p>
+      <input id="verify-email" type="hidden"/>
+      <div class="form-group"><label>Verification code</label><input id="verify-code" placeholder="123456" maxlength="6" inputmode="numeric"/></div>
+      <button class="btn btn-primary" style="width:100%" onclick="confirmCode()">Confirm email</button>
+    </div>
     <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="closeAuth()">Cancel</button>
+  </div>
+</div>
+
+<!-- PRODUCT DETAIL MODAL -->
+<div class="modal-backdrop" id="product-modal">
+  <div class="modal" style="width:480px;max-width:95vw">
+    <button onclick="closeProduct()" style="float:right;background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1">✕</button>
+    <img id="pm-img" style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;margin-bottom:16px;background:var(--bg)"/>
+    <h2 id="pm-name" style="font-size:18px;font-weight:700;margin-bottom:12px"></h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:14px;margin-bottom:16px">
+      <div><div style="color:var(--muted);font-size:12px;margin-bottom:2px">Price</div><strong id="pm-price" style="font-size:18px;color:var(--accent)"></strong></div>
+      <div><div style="color:var(--muted);font-size:12px;margin-bottom:2px">Brand</div><span id="pm-brand"></span></div>
+      <div><div style="color:var(--muted);font-size:12px;margin-bottom:2px">Category</div><span id="pm-category"></span></div>
+      <div><div style="color:var(--muted);font-size:12px;margin-bottom:2px">Color</div><span id="pm-color"></span></div>
+      <div><div style="color:var(--muted);font-size:12px;margin-bottom:2px">Product ID</div><span id="pm-id" style="color:var(--muted)"></span></div>
+      <div><div style="color:var(--muted);font-size:12px;margin-bottom:2px">In stock</div><span id="pm-stock"></span></div>
+    </div>
+    <button class="btn btn-primary" id="pm-add-btn" style="width:100%">Add to cart</button>
   </div>
 </div>
 
@@ -183,9 +326,9 @@
 <script>
 // ── CONFIG — replace with your CDK outputs ────────────────────────────────────
 const CONFIG = {
-  apiUrl: "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com",
-  userPoolId: "us-east-1_XXXXXXX",
-  clientId: "XXXXXXXXXXXXXXXXXXXXXXXXXX",
+  apiUrl: "https://szg8bndmv3.execute-api.us-east-1.amazonaws.com",
+  userPoolId: "us-east-1_B6NvduMMZ",
+  clientId: "3brnmadahdbh6eb9rs7sedpu9g",
   region: "us-east-1",
 };
 
@@ -196,19 +339,12 @@ let state = {
   accessToken: null,
   cart: { items: [], subtotal: 0 },
   products: [],
+  filtered: [],
+  stock: {},
+  page: 1,
 };
+const PAGE_SIZE = 50;
 
-// ── DEMO products (replace with API call to /api/products) ───────────────────
-const DEMO_PRODUCTS = [
-  { id:"p1", name:"Wireless Headphones", desc:"Premium noise-cancelling over-ear headphones", price:89.99, emoji:"🎧", stock:14, category:"Electronics" },
-  { id:"p2", name:"Mechanical Keyboard", desc:"TKL layout with tactile switches and RGB", price:129.99, emoji:"⌨️", stock:7, category:"Electronics" },
-  { id:"p3", name:"Running Shoes", desc:"Lightweight trail runners for all terrains", price:74.99, emoji:"👟", stock:22, category:"Apparel" },
-  { id:"p4", name:"Coffee Grinder", desc:"Burr grinder with 15 grind settings", price:49.99, emoji:"☕", stock:9, category:"Kitchen" },
-  { id:"p5", name:"Yoga Mat", desc:"Extra thick non-slip mat with carry strap", price:34.99, emoji:"🧘", stock:31, category:"Fitness" },
-  { id:"p6", name:"Smart Watch", desc:"Health tracking with 7-day battery life", price:199.99, emoji:"⌚", stock:5, category:"Electronics" },
-  { id:"p7", name:"Backpack", desc:"30L waterproof daypack with laptop sleeve", price:59.99, emoji:"🎒", stock:18, category:"Accessories" },
-  { id:"p8", name:"Desk Lamp", desc:"LED lamp with wireless charging base", price:44.99, emoji:"💡", stock:12, category:"Home" },
-];
 
 // ── ROUTING ───────────────────────────────────────────────────────────────────
 function showPage(page) {
@@ -222,40 +358,199 @@ function showPage(page) {
 }
 
 // ── PRODUCTS ──────────────────────────────────────────────────────────────────
-function renderProducts(products) {
+async function loadProducts() {
   const grid = document.getElementById("product-grid");
-  grid.innerHTML = products.map(p => `
-    <div class="product-card">
-      <div class="product-img">${p.emoji}</div>
-      <div class="product-body">
-        <div class="product-name">${p.name}</div>
-        <div class="product-desc">${p.desc}</div>
-        <div class="product-footer">
-          <span class="product-price">$${p.price.toFixed(2)}</span>
-          <span class="badge">${p.stock} in stock</span>
-        </div>
-        <button class="btn btn-primary btn-sm" style="width:100%;margin-top:10px"
-          onclick='addToCart(${JSON.stringify(p)})'>Add to cart</button>
-      </div>
-    </div>`).join("");
+  grid.innerHTML = `<p style="color:var(--muted);grid-column:1/-1">Loading products…</p>`;
+  try {
+    const data = await apiCall("GET", "/api/products?limit=500");
+    state.products = data.items || [];
+    populateFilterDropdowns(state.products);
+    state.filtered = state.products;
+    // Load stock counts in parallel — don't block product display
+    apiCall("GET", "/api/inventory").then(inv => {
+      state.stock = inv.stock || {};
+      applySort(); // re-render with stock info
+    }).catch(() => {});
+    applySort();
+  } catch {
+    grid.innerHTML = `<p style="color:var(--muted);grid-column:1/-1">Could not load products.</p>`;
+  }
 }
 
-function filterProducts(q) {
-  const lower = q.toLowerCase();
-  renderProducts(lower
-    ? DEMO_PRODUCTS.filter(p => p.name.toLowerCase().includes(lower) || p.category.toLowerCase().includes(lower))
-    : DEMO_PRODUCTS
-  );
+function renderProducts(products) {
+  const grid = document.getElementById("product-grid");
+  if (!products.length) {
+    grid.innerHTML = `<p style="color:var(--muted);grid-column:1/-1">No products found.</p>`;
+    renderPagination(0);
+    return;
+  }
+
+  const totalPages = Math.ceil(products.length / PAGE_SIZE);
+  if (state.page > totalPages) state.page = 1;
+  const start = (state.page - 1) * PAGE_SIZE;
+  const page  = products.slice(start, start + PAGE_SIZE);
+
+  grid.innerHTML = page.map(p => {
+    const avail = state.stock[String(p.product_id)];
+    const hasStock = avail === undefined || avail > 0;
+    const stockLine = avail === undefined
+      ? ''
+      : avail === 0
+        ? `<div style="font-size:12px;font-weight:600;color:#991b1b;margin-bottom:6px">Out of stock</div>`
+        : avail <= 5
+          ? `<div style="font-size:12px;font-weight:600;color:#b45309;margin-bottom:6px">Only ${avail} left!</div>`
+          : avail <= 10
+            ? `<div style="font-size:12px;font-weight:600;color:#854d0e;margin-bottom:6px">${avail} left in stock</div>`
+            : `<div style="font-size:12px;font-weight:500;color:#166534;margin-bottom:6px">${avail} in stock</div>`;
+    return `
+    <div class="product-card" style="cursor:pointer" onclick='openProduct(${JSON.stringify(p)})'>
+      <img class="product-img" src="${p.image_url}" alt="${p.name}" onerror="this.style.visibility='hidden'"/>
+      <div class="product-body">
+        <div class="product-name">${p.name}</div>
+        <div class="product-desc">${p.brand} &middot; ${p.color}</div>
+        ${stockLine}
+        <div class="product-footer">
+          <span class="product-price">$${p.price.toFixed(2)}</span>
+          <span class="badge">${p.category}</span>
+        </div>
+        <button class="btn btn-primary btn-sm" style="width:100%;margin-top:10px"
+          ${hasStock ? "" : "disabled style='width:100%;margin-top:10px;opacity:.5;cursor:not-allowed'"}
+          onclick='event.stopPropagation();${hasStock ? `addToCart(${JSON.stringify(p)})` : ""}'>
+          ${hasStock ? "Add to cart" : "Out of stock"}
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+
+  renderPagination(totalPages);
+}
+
+function renderPagination(totalPages) {
+  const existing = document.getElementById("pagination");
+  if (existing) existing.remove();
+  if (totalPages <= 1) return;
+
+  const nav = document.createElement("div");
+  nav.id = "pagination";
+  nav.className = "pagination";
+
+  const prev = document.createElement("button");
+  prev.className = "page-btn";
+  prev.textContent = "‹";
+  prev.disabled = state.page === 1;
+  prev.onclick = () => goToPage(state.page - 1);
+  nav.appendChild(prev);
+
+  // Show a window of pages around the current one
+  const delta = 2;
+  const pages = new Set([1, totalPages]);
+  for (let i = Math.max(1, state.page - delta); i <= Math.min(totalPages, state.page + delta); i++) pages.add(i);
+  let last = 0;
+  for (const p of [...pages].sort((a, b) => a - b)) {
+    if (last && p - last > 1) {
+      const ellipsis = document.createElement("span");
+      ellipsis.textContent = "…";
+      ellipsis.style.cssText = "padding:0 4px;color:var(--muted);align-self:center";
+      nav.appendChild(ellipsis);
+    }
+    const btn = document.createElement("button");
+    btn.className = "page-btn" + (p === state.page ? " active" : "");
+    btn.textContent = p;
+    btn.onclick = () => goToPage(p);
+    nav.appendChild(btn);
+    last = p;
+  }
+
+  const next = document.createElement("button");
+  next.className = "page-btn";
+  next.textContent = "›";
+  next.disabled = state.page === totalPages;
+  next.onclick = () => goToPage(state.page + 1);
+  nav.appendChild(next);
+
+  document.getElementById("page-products").appendChild(nav);
+}
+
+function goToPage(p) {
+  state.page = p;
+  applySort();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function populateFilterDropdowns(products) {
+  const brands     = [...new Set(products.map(p => p.brand).filter(Boolean))].sort();
+  const categories = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
+
+  const brandSel = document.getElementById("brand-select");
+  const catSel   = document.getElementById("category-select");
+
+  brandSel.innerHTML    = `<option value="">All brands</option>`    + brands.map(b     => `<option value="${b}">${b}</option>`).join("");
+  catSel.innerHTML      = `<option value="">All categories</option>` + categories.map(c => `<option value="${c}">${c}</option>`).join("");
+}
+
+function applyFilters() {
+  const brand    = document.getElementById("brand-select").value;
+  const category = document.getElementById("category-select").value;
+  const q        = document.getElementById("search-input").value.toLowerCase();
+
+  state.filtered = state.products.filter(p => {
+    if (brand    && p.brand    !== brand)    return false;
+    if (category && p.category !== category) return false;
+    if (q && !p.name.toLowerCase().includes(q) &&
+             !p.brand.toLowerCase().includes(q) &&
+             !p.category.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  state.page = 1;
+  applySort();
+}
+
+function applySort() {
+  state.page = state.page || 1;
+  const sort = document.getElementById("sort-select")?.value ?? "";
+  const list = [...state.filtered];
+  if (sort === "price-asc")    list.sort((a, b) => a.price - b.price);
+  if (sort === "price-desc")   list.sort((a, b) => b.price - a.price);
+  if (sort === "name-asc")     list.sort((a, b) => a.name.localeCompare(b.name));
+  if (sort === "brand-asc")    list.sort((a, b) => a.brand.localeCompare(b.brand));
+  if (sort === "category-asc") list.sort((a, b) => a.category.localeCompare(b.category));
+  renderProducts(list);
+}
+
+async function filterProducts(q) {
+  // When search changes, re-apply all active filters client-side
+  // (falls back to search API only when brand/category dropdowns are both "All")
+  const brand    = document.getElementById("brand-select").value;
+  const category = document.getElementById("category-select").value;
+
+  if (!q && !brand && !category) {
+    state.filtered = state.products;
+    state.page = 1;
+    applySort();
+    return;
+  }
+
+  if (!brand && !category && q) {
+    // pure text search — use the search API for better results
+    try {
+      const data = await apiCall("GET", `/api/search?q=${encodeURIComponent(q)}`);
+      state.filtered = data.items || [];
+      applySort();
+      return;
+    } catch { /* fall through to client-side */ }
+  }
+
+  applyFilters();
 }
 
 // ── CART ──────────────────────────────────────────────────────────────────────
 function addToCart(product) {
   const items = state.cart.items;
-  const existing = items.find(i => i.productId === product.id);
+  const existing = items.find(i => i.productId === product.product_id);
   if (existing) {
     existing.quantity++;
   } else {
-    items.push({ productId: product.id, name: product.name, price: product.price, quantity: 1, emoji: product.emoji });
+    items.push({ productId: product.product_id, name: product.name, price: product.price, quantity: 1, image_url: product.image_url });
   }
   recalcCart();
   toast(`${product.name} added to cart`);
@@ -263,7 +558,7 @@ function addToCart(product) {
   // If authenticated, sync to backend
   if (state.idToken) {
     apiCall("POST", "/api/me/cart", {
-      productId: product.id, name: product.name,
+      productId: product.product_id, name: product.name,
       price: product.price, quantity: 1,
     }).catch(() => {});
   }
@@ -290,7 +585,7 @@ function renderCart() {
   }
   el.innerHTML = state.cart.items.map(i => `
     <div class="cart-item">
-      <div class="cart-item-img">${i.emoji || "📦"}</div>
+      <img class="cart-item-img" src="${i.image_url || ''}" alt="${i.name}" onerror="this.style.visibility='hidden'"/>
       <div class="cart-item-info">
         <div class="cart-item-name">${i.name}</div>
         <div class="cart-item-price">$${i.price.toFixed(2)} × ${i.quantity}</div>
@@ -309,15 +604,78 @@ function renderCart() {
 
 function checkout() {
   if (!state.idToken) { openAuth(); return; }
-  apiCall("POST", "/api/orders", {
-    items: state.cart.items,
-    total: state.cart.subtotal,
-  }).then(() => {
+  if (!state.cart.items.length) return;
+
+  // Pre-fill address from profile if available
+  const savedAddress = document.getElementById("pf-address")?.value || "";
+  document.getElementById("pay-address").value = savedAddress;
+
+  // Pre-fill name from user state
+  const fullName = `${state.user?.firstName || ""} ${state.user?.lastName || ""}`.trim();
+  document.getElementById("pay-name").value = fullName;
+
+  // Render order summary
+  document.getElementById("pay-items").innerHTML = state.cart.items.map(i => `
+    <div style="display:flex;align-items:center;gap:10px">
+      <img class="pay-item-img" src="${i.image_url || ""}" alt="${i.name}" onerror="this.style.visibility='hidden'"/>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i.name}</div>
+        <div style="font-size:12px;color:var(--muted)">Qty: ${i.quantity}</div>
+      </div>
+      <div style="font-size:14px;font-weight:600">$${(i.price * i.quantity).toFixed(2)}</div>
+    </div>`).join("");
+
+  const shipping = 0;
+  document.getElementById("pay-totals").innerHTML = `
+    <div class="pay-line"><span>Subtotal</span><span>$${state.cart.subtotal.toFixed(2)}</span></div>
+    <div class="pay-line"><span>Shipping</span><span>${shipping === 0 ? "Free" : "$" + shipping.toFixed(2)}</span></div>
+    <div class="pay-line"><span>Total</span><span>$${state.cart.subtotal.toFixed(2)}</span></div>`;
+
+  showPage("payment");
+}
+
+async function placeOrder() {
+  const address  = document.getElementById("pay-address").value.trim();
+  const cardNum  = document.getElementById("pay-card-num").value.replace(/\s/g, "");
+  const expiry   = document.getElementById("pay-expiry").value.trim();
+  const cvv      = document.getElementById("pay-cvv").value.trim();
+  const cardName = document.getElementById("pay-name").value.trim();
+
+  if (!address)                      { toast("Please enter a shipping address");  return; }
+  if (cardNum.length < 15)           { toast("Please enter a valid card number"); return; }
+  if (!expiry || !cvv || !cardName)  { toast("Please complete all card fields");  return; }
+
+  const btn = document.getElementById("place-order-btn");
+  btn.disabled = true;
+  btn.textContent = "Placing order…";
+
+  try {
+    await apiCall("POST", "/api/orders", {
+      items:           state.cart.items,
+      total:           state.cart.subtotal,
+      shippingAddress: address,
+    });
     state.cart = { items: [], subtotal: 0 };
     recalcCart();
     toast("Order placed! ✓");
     showPage("orders");
-  }).catch(() => toast("Checkout failed — please try again"));
+  } catch {
+    toast("Order failed — please try again");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Place order";
+  }
+}
+
+// Card input formatters
+function fmtCard(el) {
+  let v = el.value.replace(/\D/g, "").slice(0, 16);
+  el.value = v.replace(/(.{4})/g, "$1 ").trim();
+}
+function fmtExpiry(el) {
+  let v = el.value.replace(/\D/g, "").slice(0, 4);
+  if (v.length >= 3) v = v.slice(0,2) + " / " + v.slice(2);
+  el.value = v;
 }
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
@@ -328,29 +686,55 @@ async function loadOrders() {
   try {
     const data = await apiCall("GET", "/api/me/orders");
     if (!data.orders.length) { el.innerHTML = `<p style="color:var(--muted)">No orders yet.</p>`; return; }
-    el.innerHTML = data.orders.map(o => `
+    el.innerHTML = data.orders.map(o => {
+      const date = o.createdAt ? new Date(o.createdAt * 1000).toLocaleDateString("en-US", { year:"numeric", month:"short", day:"numeric" }) : "";
+      return `
       <div class="order-row">
         <div style="flex:1">
           <div class="order-id">#${o.orderId.slice(0,8).toUpperCase()}</div>
-          <div class="order-meta">${o.itemCount} item(s) · $${parseFloat(o.total).toFixed(2)}</div>
+          <div class="order-meta">${o.itemCount} item(s) · $${parseFloat(o.total).toFixed(2)}${date ? " · " + date : ""}</div>
         </div>
         <span class="status-pill status-${o.status}">${o.status}</span>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   } catch { el.innerHTML = `<p style="color:var(--muted)">Could not load orders.</p>`; }
 }
 
 // ── PROFILE ───────────────────────────────────────────────────────────────────
 async function loadProfile() {
   if (!state.idToken) return;
+
+  // Pre-fill from JWT claims immediately while the API call loads
+  const u = state.user;
+  document.getElementById("pf-first").value = u.firstName;
+  document.getElementById("pf-last").value  = u.lastName;
+  document.getElementById("pf-email").value = u.email;
+
+  // Show account info card
+  const init = (u.firstName?.[0] || u.email?.[0] || "?").toUpperCase();
+  document.getElementById("profile-avatar").textContent  = init;
+  document.getElementById("pf-display-name").textContent = `${u.firstName} ${u.lastName}`.trim() || u.email;
+  document.getElementById("pf-display-email").textContent = u.email;
+  document.getElementById("pf-display-id").textContent    = u.sub;
+  document.getElementById("profile-account").style.display = "";
+
   try {
     const data = await apiCall("GET", "/api/me");
-    document.getElementById("pf-first").value   = data.firstName   || "";
-    document.getElementById("pf-last").value    = data.lastName    || "";
-    document.getElementById("pf-email").value   = data.email       || state.user?.email || "";
-    document.getElementById("pf-phone").value   = data.phone       || "";
-    document.getElementById("pf-address").value = data.address     || "";
-    const init = (data.firstName?.[0] || data.email?.[0] || "?").toUpperCase();
-    document.getElementById("profile-avatar").textContent = init;
+    document.getElementById("pf-first").value   = data.firstName || u.firstName;
+    document.getElementById("pf-last").value    = data.lastName  || u.lastName;
+    document.getElementById("pf-phone").value   = data.phone     || "";
+    document.getElementById("pf-address").value = data.address   || "";
+    if (data.createdAt) {
+      const date = new Date(data.createdAt * 1000).toLocaleDateString("en-US", { year:"numeric", month:"long", day:"numeric" });
+      document.getElementById("pf-display-since").textContent = `Member since ${date}`;
+    }
+    if (data.lastLogin) {
+      const loginDate = new Date(data.lastLogin * 1000).toLocaleString("en-US", { year:"numeric", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+      document.getElementById("pf-display-login").textContent = `Last login: ${loginDate}`;
+    }
+    const displayName = `${data.firstName || u.firstName} ${data.lastName || u.lastName}`.trim();
+    document.getElementById("pf-display-name").textContent = displayName || u.email;
+    document.getElementById("profile-avatar").textContent  = (displayName[0] || u.email[0] || "?").toUpperCase();
   } catch {}
 }
 
@@ -371,10 +755,13 @@ async function saveProfile() {
 function openAuth()  { document.getElementById("auth-modal").classList.add("open"); }
 function closeAuth() { document.getElementById("auth-modal").classList.remove("open"); clearAlert(); }
 function switchTab(t) {
-  document.getElementById("form-signin").style.display = t === "signin" ? "" : "none";
-  document.getElementById("form-signup").style.display = t === "signup" ? "" : "none";
+  ["signin","signup","verify"].forEach(id => {
+    document.getElementById(`form-${id}`).style.display = t === id ? "" : "none";
+  });
   document.getElementById("tab-signin").classList.toggle("active", t === "signin");
   document.getElementById("tab-signup").classList.toggle("active", t === "signup");
+  // Hide tab bar on verify step — user can't go back to signup without restarting
+  document.getElementById("auth-tabs").style.display = t === "verify" ? "none" : "";
   clearAlert();
 }
 function showAlert(msg, type) {
@@ -386,39 +773,98 @@ function clearAlert() {
   el.className = "alert"; el.textContent = "";
 }
 
-// Demo auth — replace with real Cognito SDK calls in production
+// ── COGNITO HELPERS ───────────────────────────────────────────────────────────
+async function cognitoReq(action, body) {
+  const res = await fetch(`https://cognito-idp.${CONFIG.region}.amazonaws.com/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": `AWSCognitoIdentityProviderService.${action}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.__type || "Authentication error");
+  return data;
+}
+
+function parseJwt(token) {
+  return JSON.parse(atob(token.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")));
+}
+
+async function signInRequest(email, pass) {
+  const data   = await cognitoReq("InitiateAuth", {
+    AuthFlow: "USER_PASSWORD_AUTH",
+    AuthParameters: { USERNAME: email, PASSWORD: pass },
+    ClientId: CONFIG.clientId,
+  });
+  const tokens = data.AuthenticationResult;
+  const claims = parseJwt(tokens.IdToken);
+  return { claims, idToken: tokens.IdToken, accessToken: tokens.AccessToken };
+}
+
 async function signIn() {
-  const email = document.getElementById("si-email").value;
+  const email = document.getElementById("si-email").value.trim();
   const pass  = document.getElementById("si-pass").value;
   if (!email || !pass) { showAlert("Please enter email and password", "error"); return; }
-
-  // DEMO: simulate successful auth — replace with Cognito AuthenticationDetails flow
-  const demoToken = btoa(JSON.stringify({ sub: "demo-user-001", email }));
-  onSignedIn({ email, firstName: email.split("@")[0], idToken: demoToken });
-  closeAuth();
-  toast(`Welcome back, ${email.split("@")[0]}!`);
+  try {
+    const tokens = await signInRequest(email, pass);
+    onSignedIn(tokens);
+    closeAuth();
+    toast(`Welcome back, ${tokens.claims.given_name || email.split("@")[0]}!`);
+  } catch(e) { showAlert(e.message, "error"); }
 }
 
 async function signUp() {
-  const first = document.getElementById("su-first").value;
-  const last  = document.getElementById("su-last").value;
-  const email = document.getElementById("su-email").value;
+  const first = document.getElementById("su-first").value.trim();
+  const last  = document.getElementById("su-last").value.trim();
+  const email = document.getElementById("su-email").value.trim();
   const pass  = document.getElementById("su-pass").value;
   if (!first || !email || !pass) { showAlert("Please fill all fields", "error"); return; }
-  if (pass.length < 8) { showAlert("Password must be at least 8 characters", "error"); return; }
-  // DEMO: simulate sign-up
-  showAlert("Account created! Signing you in…", "success");
-  setTimeout(() => {
-    const demoToken = btoa(JSON.stringify({ sub: "demo-user-" + Date.now(), email }));
-    onSignedIn({ email, firstName: first, idToken: demoToken });
+  if (pass.length < 8)           { showAlert("Password must be at least 8 characters", "error"); return; }
+  try {
+    await cognitoReq("SignUp", {
+      ClientId: CONFIG.clientId,
+      Username: email,
+      Password: pass,
+      UserAttributes: [
+        { Name: "given_name",  Value: first },
+        { Name: "family_name", Value: last  },
+        { Name: "email",       Value: email },
+      ],
+    });
+    // Auto-confirmed by pre-signup trigger — sign in immediately
+    const tokens = await signInRequest(email, pass);
+    onSignedIn(tokens);
     closeAuth();
     toast(`Welcome, ${first}!`);
-  }, 800);
+  } catch(e) { showAlert(e.message, "error"); }
 }
 
-function onSignedIn({ email, firstName, idToken }) {
-  state.user = { email, firstName };
-  state.idToken = idToken;
+async function confirmCode() {
+  const email = document.getElementById("verify-email").value;
+  const code  = document.getElementById("verify-code").value.trim();
+  if (!code) { showAlert("Enter the verification code", "error"); return; }
+  try {
+    await cognitoReq("ConfirmSignUp", {
+      ClientId: CONFIG.clientId,
+      Username: email,
+      ConfirmationCode: code,
+    });
+    showAlert("Email confirmed! You can now sign in.", "success");
+    setTimeout(() => { switchTab("signin"); document.getElementById("si-email").value = email; }, 1200);
+  } catch(e) { showAlert(e.message, "error"); }
+}
+
+function onSignedIn({ claims, idToken, accessToken }) {
+  state.user = {
+    sub:       claims.sub,
+    email:     claims.email,
+    firstName: claims.given_name  || "",
+    lastName:  claims.family_name || "",
+  };
+  state.idToken     = idToken;
+  state.accessToken = accessToken;
   document.getElementById("auth-btn").style.display    = "none";
   document.getElementById("signout-btn").style.display = "";
   document.getElementById("orders-nav").style.display  = "";
@@ -426,7 +872,7 @@ function onSignedIn({ email, firstName, idToken }) {
 }
 
 function signOut() {
-  state = { user: null, idToken: null, accessToken: null, cart: { items: [], subtotal: 0 }, products: [] };
+  state = { user: null, idToken: null, accessToken: null, cart: { items: [], subtotal: 0 }, products: state.products, filtered: state.filtered, page: 1 };
   recalcCart();
   document.getElementById("auth-btn").style.display    = "";
   document.getElementById("signout-btn").style.display = "none";
@@ -450,6 +896,34 @@ async function apiCall(method, path, body) {
   return res.json();
 }
 
+// ── PRODUCT MODAL ─────────────────────────────────────────────────────────────
+function openProduct(p) {
+  document.getElementById("pm-img").src        = p.image_url || '';
+  document.getElementById("pm-name").textContent     = p.name;
+  document.getElementById("pm-price").textContent    = `$${p.price.toFixed(2)}`;
+  document.getElementById("pm-brand").textContent    = p.brand;
+  document.getElementById("pm-category").textContent = p.category;
+  document.getElementById("pm-color").textContent    = p.color;
+  document.getElementById("pm-id").textContent       = p.product_id;
+  const avail = state.stock[String(p.product_id)];
+  const addBtn = document.getElementById("pm-add-btn");
+  if (avail === undefined) {
+    document.getElementById("pm-stock").textContent = "—";
+    addBtn.disabled = false; addBtn.textContent = "Add to cart";
+  } else if (avail === 0) {
+    document.getElementById("pm-stock").textContent = "Out of stock";
+    addBtn.disabled = true; addBtn.textContent = "Out of stock";
+  } else {
+    document.getElementById("pm-stock").textContent = `${avail} available`;
+    addBtn.disabled = false; addBtn.textContent = "Add to cart";
+  }
+  addBtn.onclick = avail === 0 ? null : () => { addToCart(p); closeProduct(); };
+  document.getElementById("product-modal").classList.add("open");
+}
+function closeProduct() {
+  document.getElementById("product-modal").classList.remove("open");
+}
+
 // ── TOAST ─────────────────────────────────────────────────────────────────────
 let toastTimer;
 function toast(msg) {
@@ -460,7 +934,7 @@ function toast(msg) {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-renderProducts(DEMO_PRODUCTS);
+loadProducts();
 </script>
 </body>
 </html>

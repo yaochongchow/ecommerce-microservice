@@ -39,7 +39,7 @@ func emitEvent(detailType string, detail any) error {
 				Source:     aws.String("product-service"),
 				DetailType: aws.String(detailType),
 				Detail:     aws.String(string(detailJSON)),
-				EventBusName: aws.String("default"),
+				EventBusName: aws.String(os.Getenv("EVENT_BUS_NAME")),
 			},
 		},
 	})
@@ -86,7 +86,7 @@ func EmitProductCreatedBatch(products map[int]Item, stocks map[int]int) {
 			Source:       aws.String("product-service"),
 			DetailType:   aws.String("ProductCreated"),
 			Detail:       aws.String(string(detail)),
-			EventBusName: aws.String("default"),
+			EventBusName: aws.String(os.Getenv("EVENT_BUS_NAME")),
 		})
 		if len(entries) == 10 {
 			flush()
