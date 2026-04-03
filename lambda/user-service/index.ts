@@ -16,19 +16,15 @@ import {
   UpdateCommand,
   QueryCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 
 // ── env ───────────────────────────────────────────────────────────────────────
 const USERS_TABLE     = process.env.USERS_TABLE!;
 const CARTS_TABLE     = process.env.CARTS_TABLE!;
 const ORDER_REF_TABLE = process.env.ORDER_REF_TABLE!;
-const SESSIONS_TABLE  = process.env.SESSIONS_TABLE!;
-const EVENT_BUS_NAME  = process.env.EVENT_BUS_NAME!;
 const CART_TTL_DAYS   = 7;
 
 // ── clients ───────────────────────────────────────────────────────────────────
-const dynamo   = DynamoDBDocumentClient.from(new DynamoDBClient({}));
-const ebClient = new EventBridgeClient({});
+const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 // ── types ─────────────────────────────────────────────────────────────────────
 interface CartItem {
@@ -96,22 +92,20 @@ const getCorrelationId = (event: ApiEvent): string =>
 const cartTtl = () => Math.floor(Date.now() / 1000) + CART_TTL_DAYS * 86400;
 const now     = () => Math.floor(Date.now() / 1000);
 
-const publishEvent = async (detailType: string, detail: Record<string, unknown>) => {
-  await ebClient.send(new PutEventsCommand({
-    Entries: [{
-      Source:       "ecomm.user",
-      DetailType:   detailType,
-      Detail:       JSON.stringify(detail),
-      EventBusName: EVENT_BUS_NAME,
-    }],
-  }));
-};
-
 // ── route handlers ────────────────────────────────────────────────────────────
 async function getProfile(userId: string, cid: string) {
   const res = await dynamo.send(new GetCommand({ TableName: USERS_TABLE, Key: { userId } }));
   if (!res.Item) return response(404, { message: "User not found" }, cid);
-  return response(200, res.Item, cid);
+
+  const ts = now();
+  await dynamo.send(new UpdateCommand({
+    TableName: USERS_TABLE,
+    Key: { userId },
+    UpdateExpression: "SET lastLogin = :ts",
+    ExpressionAttributeValues: { ":ts": ts },
+  }));
+
+  return response(200, { ...res.Item, lastLogin: ts }, cid);
 }
 
 async function updateProfile(userId: string, body: Record<string, unknown>, cid: string) {
@@ -141,7 +135,6 @@ async function updateProfile(userId: string, body: Record<string, unknown>, cid:
     ReturnValues: "ALL_NEW",
   }));
 
-  await publishEvent("user.updated", { userId, updatedFields: Object.keys(updates) });
   return response(200, res.Attributes, cid);
 }
 
@@ -182,7 +175,6 @@ async function upsertCart(userId: string, body: Record<string, unknown>, cid: st
     Item: { userId, items, subtotal, updatedAt: now(), expiresAt: cartTtl() },
   }));
 
-  await publishEvent("cart.updated", { userId, itemCount: items.length });
   return response(200, { message: "Cart updated", itemCount: items.length, subtotal }, cid);
 }
 
@@ -220,22 +212,37 @@ async function handleOrderEvent(detail: Record<string, unknown>, detailType: str
   if (!userId || !orderId) return;
 
   const statusMap: Record<string, string> = {
-    "order.created":   "PENDING",
-    "order.confirmed": "CONFIRMED",
-    "order.cancelled": "CANCELLED",
+    "OrderCreated":   "PENDING",
+    "OrderConfirmed": "CONFIRMED",
+    "OrderCanceled":  "CANCELLED",
   };
 
+  const items = detail.items as unknown[] | undefined;
   const item: OrderRef = {
     userId,
     orderId,
     status:    statusMap[detailType] ?? "UNKNOWN",
-    total:     Number(detail.total ?? 0),
-    itemCount: Number(detail.itemCount ?? 0),
-    createdAt: Number(detail.createdAt ?? now()),
+    total:     Number(detail.totalAmount ?? detail.total ?? 0),
+    itemCount: items?.length ?? Number(detail.itemCount ?? 0),
+    createdAt: now(),
     updatedAt: now(),
   };
 
   await dynamo.send(new PutCommand({ TableName: ORDER_REF_TABLE, Item: item }));
+
+  // On order creation, save the shipping address to the user's profile
+  if (detailType === "OrderCreated") {
+    const addr = detail.shippingAddress as string | Record<string, unknown> | undefined;
+    const addrStr = typeof addr === "string" ? addr : (addr && Object.keys(addr).length ? JSON.stringify(addr) : null);
+    if (addrStr) {
+      await dynamo.send(new UpdateCommand({
+        TableName: USERS_TABLE,
+        Key: { userId },
+        UpdateExpression: "SET address = :addr, updatedAt = :ts",
+        ExpressionAttributeValues: { ":addr": addrStr, ":ts": now() },
+      }));
+    }
+  }
 }
 
 // ── main handler ──────────────────────────────────────────────────────────────
