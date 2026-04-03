@@ -6,6 +6,7 @@ import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import * as path from "path";
 
@@ -59,6 +60,11 @@ removalPolicy: cdk.RemovalPolicy.DESTROY,
       ),
       handler: "handler.lambda_handler",
       layers: [commonLayer],
+      logGroup: new logs.LogGroup(this, "InventoryFnLogGroup", {
+        logGroupName: "/aws/lambda/inventory-service",
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         INVENTORY_TABLE_NAME: inventoryTable.tableName,
         RESERVATIONS_TABLE_NAME: reservationsTable.tableName,
@@ -145,6 +151,11 @@ removalPolicy: cdk.RemovalPolicy.DESTROY,
       ruleName: "inventory-order-returned",
       eventPattern: { source: ["order-service"], detailType: ["OrderReturned"] },
       targets: [new targets.SqsQueue(inventoryQueue)],
+    });
+
+    new ssm.StringParameter(this, "InventoryTableNameParam", {
+      parameterName: "/ecommerce/inventory-table-name",
+      stringValue: inventoryTable.tableName,
     });
 
     new cdk.CfnOutput(this, "InventoryTableName", { value: inventoryTable.tableName });

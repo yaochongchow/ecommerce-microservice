@@ -6,6 +6,7 @@ import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 
@@ -42,6 +43,11 @@ export class ShippingStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../services/shipping')),
       handler: 'handler.lambda_handler',
       layers: [commonLayer],
+      logGroup: new logs.LogGroup(this, 'ShippingFnLogGroup', {
+        logGroupName: '/aws/lambda/shipping-service',
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         SHIPMENTS_TABLE_NAME: shipmentsTable.tableName,
         EVENT_BUS_NAME: eventBusName,

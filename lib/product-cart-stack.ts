@@ -5,6 +5,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
@@ -43,10 +44,20 @@ export class ProductCartStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // ── Upload product images to S3 on deploy ────────────────────────────────
+    new s3deploy.BucketDeployment(this, 'ProductImagesDeployment', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../services/product/product_images'))],
+      destinationBucket: imageBucket,
+      destinationKeyPrefix: 'products',
+    });
+
     // ── SQS queue for inbound inventory events ───────────────────────────────
     const inventoryQueue = new sqs.Queue(this, 'InventoryEventsQueue');
 
-    const eventBus = events.EventBus.fromEventBusName(this, 'DefaultBus', 'default');
+    const eventBusArn  = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/event-bus-arn');
+    const eventBusName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/event-bus-name');
+    const eventBus = events.EventBus.fromEventBusArn(this, 'SharedBus', eventBusArn);
+
     for (const detailType of ['LowStock', 'OutOfStock', 'StockReplenished', 'ProductRestockedFailed', 'InventoryInitialized']) {
       new events.Rule(this, `Rule${detailType}`, {
         eventBus,
@@ -83,6 +94,7 @@ export class ProductCartStack extends cdk.Stack {
         AWS_REGION: cdk.Stack.of(this).region,
         IMAGE_BUCKET: imageBucket.bucketName,
         SQS_QUEUE_URL: inventoryQueue.queueUrl,
+        EVENT_BUS_NAME: eventBusName,
       },
       portMappings: [{ containerPort: 8080 }],
     });

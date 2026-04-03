@@ -7,6 +7,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as path from 'path';
 
 export class NotificationStack extends cdk.Stack {
@@ -28,6 +29,11 @@ export class NotificationStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../services/notification')),
       handler: 'handler.lambda_handler',
       layers: [commonLayer],
+      logGroup: new logs.LogGroup(this, 'NotificationFnLogGroup', {
+        logGroupName: '/aws/lambda/notification-service',
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         EMAIL_MODE: 'mock',
         LOG_LEVEL: 'INFO',

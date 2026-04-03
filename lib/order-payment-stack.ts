@@ -6,6 +6,7 @@ import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 
@@ -67,6 +68,11 @@ export class OrderPaymentStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../services/order')),
       handler: 'handler.api_handler',
       layers: [commonLayer],
+      logGroup: new logs.LogGroup(this, 'OrderApiFnLogGroup', {
+        logGroupName: '/aws/lambda/order-api-service',
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         ORDERS_TABLE: ordersTable.tableName,
         SAGA_STATE_TABLE: sagaStateTable.tableName,
@@ -87,6 +93,11 @@ export class OrderPaymentStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../services/order')),
       handler: 'handler.event_handler',
       layers: [commonLayer],
+      logGroup: new logs.LogGroup(this, 'OrderEventFnLogGroup', {
+        logGroupName: '/aws/lambda/order-event-service',
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         ORDERS_TABLE: ordersTable.tableName,
         SAGA_STATE_TABLE: sagaStateTable.tableName,
@@ -145,6 +156,11 @@ export class OrderPaymentStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../services/payment')),
       handler: 'handler.event_handler',
       layers: [commonLayer],
+      logGroup: new logs.LogGroup(this, 'PaymentEventFnLogGroup', {
+        logGroupName: '/aws/lambda/payment-event-service',
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         PAYMENTS_TABLE: paymentsTable.tableName,
         IDEMPOTENCY_TABLE: idempotencyTable.tableName,
