@@ -79,7 +79,7 @@ def reserve_inventory(order_id: str, items: List[dict]):
     # Read upfront only for product-not-found check — stock enforcement is at write time
     items_to_reserve = []
     for item in items:
-        product_id = item["productId"]
+        product_id = str(item["productId"])
         quantity = int(item["quantity"])
         if get_inventory(product_id) is None:
             _publish_reservation_failed(order_id, product_id, "product not found")
@@ -246,7 +246,7 @@ def restock_inventory(order_id: str, return_id: str, items: List[dict]):
 
     # Build a lookup of returned quantities from the event.
     # If items list is empty (event didn't include it), fall back to full reservation quantity.
-    returned_qty = {item["productId"]: int(item["quantity"]) for item in items}
+    returned_qty = {str(item["productId"]): int(item["quantity"]) for item in items}
 
     now = datetime.now(timezone.utc).isoformat()
     for res in reservations:

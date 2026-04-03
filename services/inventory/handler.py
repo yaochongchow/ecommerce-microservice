@@ -18,11 +18,11 @@ def lambda_handler(event: dict, context):
 
     try:
         if detail_type == "ProductCreated":
-            create_product(detail["productId"], int(detail["stock"]))
+            create_product(str(detail["productId"]), int(detail["stock"]))
             return {"status": "created", "productId": detail["productId"]}
 
         elif detail_type == "ProductRestocked":
-            restock_product(detail["productId"], int(detail["quantity"]))
+            restock_product(str(detail["productId"]), int(detail["quantity"]))
             return {"status": "restocked", "productId": detail["productId"]}
 
         elif detail_type == "OrderCreated":
