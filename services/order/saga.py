@@ -41,6 +41,7 @@ def start_saga(order, correlation_id=None):
         order_id=order_id, user_id=order["user_id"], items=order["items"],
         total_amount=float(order["total_amount"]), currency=order.get("currency", "USD"),
         idempotency_key=order.get("idempotency_key"),
+        shipping_address=order.get("shipping_address"),
     )
     publish_event("OrderCreated", event_data, source=ORDER_SOURCE, correlation_id=correlation_id)
 

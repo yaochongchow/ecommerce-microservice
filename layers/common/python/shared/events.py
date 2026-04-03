@@ -51,7 +51,7 @@ def publish_event(detail_type, detail, source, correlation_id=None):
 # ── Event builders (camelCase fields to match M4) ─────────────────────────
 
 
-def build_order_created_event(order_id, user_id, items, total_amount, currency="USD", idempotency_key=None):
+def build_order_created_event(order_id, user_id, items, total_amount, currency="USD", idempotency_key=None, shipping_address=None):
     return {
         "orderId": order_id,
         "userId": user_id,
@@ -64,6 +64,7 @@ def build_order_created_event(order_id, user_id, items, total_amount, currency="
         "totalAmount": float(total_amount),
         "currency": currency,
         "idempotencyKey": idempotency_key,
+        "shippingAddress": shipping_address or {},
     }
 
 
