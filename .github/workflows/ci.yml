@@ -27,6 +27,9 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Run Python tests
+        run: pytest --tb=short -q
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -37,6 +40,9 @@ jobs:
 
       - name: Build TypeScript
         run: npm run build
+
+      - name: Run CDK stack tests
+        run: npm test
 
       - name: CDK synth
         run: npx cdk synth
