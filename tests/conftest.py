@@ -7,10 +7,13 @@ Uses moto to mock AWS services so tests run locally without real AWS credentials
 import os
 import sys
 
-# Add service and layer paths so imports resolve correctly
+# Add layer path so shared/common imports resolve
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_project_root, "services"))
 sys.path.insert(0, os.path.join(_project_root, "layers", "common", "python"))
+
+# Bare module names (models, handler, etc.) are shared across services.
+# Each test subdirectory has its own conftest.py that adds the correct
+# service directory to sys.path so bare imports resolve unambiguously.
 
 import boto3
 import pytest

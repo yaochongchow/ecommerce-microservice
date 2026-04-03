@@ -1,23 +1,18 @@
 """Tests for the notification service."""
 
-import os
-import sys
+import importlib
 
 import pytest
-
-# The notification service uses bare imports (e.g. ``from email_client import ...``)
-# so its directory must be on sys.path for the import to resolve.
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_notification_svc_dir = os.path.join(_project_root, "services", "notification")
-if _notification_svc_dir not in sys.path:
-    sys.path.insert(0, _notification_svc_dir)
 
 
 class TestOrderConfirmation:
     def test_order_confirmation_email(self, mocker):
         """PaymentSucceeded event should send an order confirmation email."""
-        mock_send = mocker.patch("notification.service.send_email")
-        from notification.service import notify_payment_succeeded
+        import email_client; importlib.reload(email_client)
+        import service; importlib.reload(service)
+
+        mock_send = mocker.patch("service.send_email")
+        from service import notify_payment_succeeded
 
         detail = {
             "orderId": "ord_notify001",
@@ -39,8 +34,11 @@ class TestOrderConfirmation:
 
     def test_order_confirmation_includes_items(self, mocker):
         """Confirmation email body should list each item."""
-        mock_send = mocker.patch("notification.service.send_email")
-        from notification.service import notify_payment_succeeded
+        import email_client; importlib.reload(email_client)
+        import service; importlib.reload(service)
+
+        mock_send = mocker.patch("service.send_email")
+        from service import notify_payment_succeeded
 
         detail = {
             "orderId": "ord_items001",
@@ -60,8 +58,11 @@ class TestOrderConfirmation:
 class TestShipmentNotification:
     def test_shipment_email(self, mocker):
         """ShipmentCreated event should send a shipment tracking email."""
-        mock_send = mocker.patch("notification.service.send_email")
-        from notification.service import notify_shipment_created
+        import email_client; importlib.reload(email_client)
+        import service; importlib.reload(service)
+
+        mock_send = mocker.patch("service.send_email")
+        from service import notify_shipment_created
 
         detail = {
             "orderId": "ord_ship_notify",
@@ -81,8 +82,11 @@ class TestShipmentNotification:
 
     def test_shipment_email_contains_order_id(self, mocker):
         """Shipment email body should reference the order ID."""
-        mock_send = mocker.patch("notification.service.send_email")
-        from notification.service import notify_shipment_created
+        import email_client; importlib.reload(email_client)
+        import service; importlib.reload(service)
+
+        mock_send = mocker.patch("service.send_email")
+        from service import notify_shipment_created
 
         detail = {
             "orderId": "ord_ship_ref",
@@ -100,8 +104,11 @@ class TestShipmentNotification:
 class TestCancellationNotification:
     def test_cancellation_email(self, mocker):
         """OrderCanceled event should send a cancellation email."""
-        mock_send = mocker.patch("notification.service.send_email")
-        from notification.service import notify_order_canceled
+        import email_client; importlib.reload(email_client)
+        import service; importlib.reload(service)
+
+        mock_send = mocker.patch("service.send_email")
+        from service import notify_order_canceled
 
         detail = {
             "orderId": "ord_cancel_notify",
@@ -120,8 +127,11 @@ class TestCancellationNotification:
 
     def test_cancellation_default_reason(self, mocker):
         """Cancellation with no explicit reason should use default text."""
-        mock_send = mocker.patch("notification.service.send_email")
-        from notification.service import notify_order_canceled
+        import email_client; importlib.reload(email_client)
+        import service; importlib.reload(service)
+
+        mock_send = mocker.patch("service.send_email")
+        from service import notify_order_canceled
 
         detail = {
             "orderId": "ord_cancel_default",
@@ -136,8 +146,10 @@ class TestCancellationNotification:
 class TestEmailClient:
     def test_mock_mode_logs_instead_of_sending(self, mocker):
         """In mock mode (default in tests), send_email should log instead of calling SES."""
-        mock_logger = mocker.patch("notification.email_client.logger")
-        from notification.email_client import send_email
+        import email_client; importlib.reload(email_client)
+
+        mock_logger = mocker.patch("email_client.logger")
+        from email_client import send_email
 
         send_email(to="test@test.com", subject="Test Subject", body="Hello World")
 
@@ -150,8 +162,10 @@ class TestEmailClient:
 
     def test_mock_mode_does_not_call_ses(self, mocker):
         """In mock mode, the SES client should never be invoked."""
-        mock_ses = mocker.patch("notification.email_client.ses_client")
-        from notification.email_client import send_email
+        import email_client; importlib.reload(email_client)
+
+        mock_ses = mocker.patch("email_client.ses_client")
+        from email_client import send_email
 
         send_email(to="test@test.com", subject="Test", body="Body")
 

@@ -34,9 +34,8 @@ logger = get_logger("stripe-client")
 # Payment mode: "mock" auto-approves without calling Stripe, "live" uses real Stripe
 PAYMENT_MODE = os.environ.get("PAYMENT_MODE", "mock")
 
-if PAYMENT_MODE != "mock":
-    import stripe
-    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_placeholder")
+import stripe
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_placeholder")
 
 
 # ---------------------------------------------------------------------------

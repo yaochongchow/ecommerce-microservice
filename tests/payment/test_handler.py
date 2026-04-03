@@ -1,20 +1,24 @@
 """Tests for the payment service event handler."""
 
 import json
+import os
 import pytest
+
+# Force live mode so stripe mocks are used (mock mode bypasses stripe entirely)
+os.environ["PAYMENT_MODE"] = "live"
 
 
 class TestOrderReadyForPaymentEvent:
     def test_successful_payment(self, aws_mock, lambda_context, mocker):
         mock_charge = mocker.patch(
-            "payment.stripe_client.stripe.Charge.create",
+            "stripe_client.stripe.Charge.create",
             return_value=mocker.Mock(id="ch_test_123", status="succeeded"),
         )
         mock_publish = mocker.patch(
-            "payment.handler.publish_event",
+            "handler.publish_event",
             return_value={"FailedEntryCount": 0},
         )
-        from payment.handler import event_handler
+        from handler import event_handler
 
         event = {
             "detail-type": "OrderReadyForPayment",
@@ -39,11 +43,11 @@ class TestOrderReadyForPaymentEvent:
 
     def test_idempotent_retry(self, aws_mock, lambda_context, mocker):
         mock_charge = mocker.patch(
-            "payment.stripe_client.stripe.Charge.create",
+            "stripe_client.stripe.Charge.create",
             return_value=mocker.Mock(id="ch_test_456", status="succeeded"),
         )
         mocker.patch("shared.events.publish_event", return_value={"FailedEntryCount": 0})
-        from payment.handler import event_handler
+        from handler import event_handler
 
         event = {
             "detail-type": "OrderReadyForPayment",
@@ -66,14 +70,14 @@ class TestOrderReadyForPaymentEvent:
     def test_payment_card_declined(self, aws_mock, lambda_context, mocker):
         import stripe
         mocker.patch(
-            "payment.stripe_client.stripe.Charge.create",
+            "stripe_client.stripe.Charge.create",
             side_effect=stripe.CardError(message="Declined", param="number", code="card_declined"),
         )
         mock_publish = mocker.patch(
-            "payment.handler.publish_event",
+            "handler.publish_event",
             return_value={"FailedEntryCount": 0},
         )
-        from payment.handler import event_handler
+        from handler import event_handler
 
         event = {
             "detail-type": "OrderReadyForPayment",
@@ -96,18 +100,18 @@ class TestOrderReadyForPaymentEvent:
 class TestCompensatePaymentEvent:
     def test_successful_refund(self, aws_mock, lambda_context, mocker):
         mocker.patch(
-            "payment.stripe_client.stripe.Charge.create",
+            "stripe_client.stripe.Charge.create",
             return_value=mocker.Mock(id="ch_refund_test", status="succeeded"),
         )
         mock_refund = mocker.patch(
-            "payment.stripe_client.stripe.Refund.create",
+            "stripe_client.stripe.Refund.create",
             return_value=mocker.Mock(id="re_test_123", amount=2999, status="succeeded"),
         )
         mock_publish = mocker.patch(
-            "payment.handler.publish_event",
+            "handler.publish_event",
             return_value={"FailedEntryCount": 0},
         )
-        from payment.handler import event_handler
+        from handler import event_handler
 
         # Step 1: Create payment
         create_event = {

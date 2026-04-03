@@ -1,47 +1,18 @@
 """Tests for the shipping service."""
 
-import os
-import sys
 import importlib
 
 import pytest
-
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_shipping_svc_dir = os.path.join(_project_root, "services", "shipping")
-
-
-def _reload_shipping_modules():
-    """Reload shipping modules so module-level boto3 clients bind to the active moto mock.
-
-    The shipping service uses bare ``from repository import ...`` which requires
-    ``services/shipping`` to be first on sys.path while reloading. We temporarily
-    prepend it, reload both modules, then remove it to avoid polluting sys.path for
-    other service tests that also have a ``repository.py``.
-    """
-    sys.path.insert(0, _shipping_svc_dir)
-    try:
-        # Remove any stale bare 'repository' from sys.modules so reload picks up
-        # the correct one from the shipping directory.
-        sys.modules.pop("repository", None)
-
-        import shipping.repository as repo_mod
-        importlib.reload(repo_mod)
-
-        import shipping.service as svc_mod
-        importlib.reload(svc_mod)
-    finally:
-        try:
-            sys.path.remove(_shipping_svc_dir)
-        except ValueError:
-            pass
 
 
 class TestCreateShipment:
     def test_create_shipment_success(self, aws_mock, mocker):
         """OrderConfirmed event should create a shipment with tracking number."""
-        _reload_shipping_modules()
-        mock_publish = mocker.patch("shipping.service._publish_event", return_value=None)
-        from shipping.service import create_shipment
+        import repository; importlib.reload(repository)
+        import service; importlib.reload(service)
+
+        mock_publish = mocker.patch("service._publish_event", return_value=None)
+        from service import create_shipment
 
         result = create_shipment(
             order_id="ord_ship001",
@@ -72,9 +43,11 @@ class TestCreateShipment:
 
     def test_idempotent_duplicate_shipment(self, aws_mock, mocker):
         """Duplicate OrderConfirmed should return cached shipment, not create new one."""
-        _reload_shipping_modules()
-        mock_publish = mocker.patch("shipping.service._publish_event", return_value=None)
-        from shipping.service import create_shipment
+        import repository; importlib.reload(repository)
+        import service; importlib.reload(service)
+
+        mock_publish = mocker.patch("service._publish_event", return_value=None)
+        from service import create_shipment
 
         result1 = create_shipment(
             order_id="ord_dup_ship",
@@ -102,10 +75,12 @@ class TestCreateShipment:
 
     def test_shipment_stored_in_dynamodb(self, aws_mock, mocker):
         """Created shipment should be retrievable from the repository."""
-        _reload_shipping_modules()
-        mocker.patch("shipping.service._publish_event", return_value=None)
-        from shipping.service import create_shipment
-        from shipping.repository import get_shipment_by_order
+        import repository; importlib.reload(repository)
+        import service; importlib.reload(service)
+
+        mocker.patch("service._publish_event", return_value=None)
+        from service import create_shipment
+        from repository import get_shipment_by_order
 
         create_shipment(
             order_id="ord_stored",
@@ -121,9 +96,11 @@ class TestCreateShipment:
 
     def test_shipment_contains_items(self, aws_mock, mocker):
         """Shipment record should contain the order items."""
-        _reload_shipping_modules()
-        mocker.patch("shipping.service._publish_event", return_value=None)
-        from shipping.service import create_shipment
+        import repository; importlib.reload(repository)
+        import service; importlib.reload(service)
+
+        mocker.patch("service._publish_event", return_value=None)
+        from service import create_shipment
 
         items = [
             {"productId": "p1", "quantity": 2},
@@ -140,13 +117,15 @@ class TestCreateShipment:
 
     def test_shipment_creation_failure_publishes_failed_event(self, aws_mock, mocker):
         """If storing the shipment fails, ShipmentCreationFailed should be published."""
-        _reload_shipping_modules()
-        mock_publish = mocker.patch("shipping.service._publish_event", return_value=None)
+        import repository; importlib.reload(repository)
+        import service; importlib.reload(service)
+
+        mock_publish = mocker.patch("service._publish_event", return_value=None)
         mocker.patch(
-            "shipping.service.put_shipment",
+            "service.put_shipment",
             side_effect=Exception("DynamoDB write failed"),
         )
-        from shipping.service import create_shipment
+        from service import create_shipment
 
         with pytest.raises(Exception, match="DynamoDB write failed"):
             create_shipment(
