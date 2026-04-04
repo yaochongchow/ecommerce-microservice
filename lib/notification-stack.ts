@@ -37,6 +37,7 @@ export class NotificationStack extends cdk.Stack {
       environment: {
         EMAIL_MODE: 'mock',
         LOG_LEVEL: 'INFO',
+        SES_FROM_EMAIL: 'noreply@shopcloud.example.com',
       },
       timeout: cdk.Duration.seconds(30),
     });
@@ -79,6 +80,13 @@ export class NotificationStack extends cdk.Stack {
       eventBus,
       ruleName: 'notification-order-canceled',
       eventPattern: { source: ['order-service'], detailType: ['OrderCanceled'] },
+      targets: [new targets.SqsQueue(notificationQueue)],
+    });
+
+    new events.Rule(this, 'PaymentRefundedRule', {
+      eventBus,
+      ruleName: 'notification-payment-refunded',
+      eventPattern: { source: ['payment-service'], detailType: ['PaymentRefunded'] },
       targets: [new targets.SqsQueue(notificationQueue)],
     });
 

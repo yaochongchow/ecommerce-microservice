@@ -44,7 +44,7 @@ def notify_shipment_created(detail: dict):
 
 def notify_order_canceled(detail: dict):
     order_id = detail["orderId"]
-    email = detail["email"]
+    email = detail.get("email", "customer@example.com")
     reason = detail.get("reason", "your order has been cancelled")
 
     body = (
@@ -56,3 +56,20 @@ def notify_order_canceled(detail: dict):
 
     send_email(to=email, subject="Your Order Has Been Cancelled", body=body)
     logger.info(f"Cancellation notification sent for order {order_id}, reason: {reason}")
+
+
+def notify_payment_refunded(detail: dict):
+    order_id = detail["orderId"]
+    email = detail.get("email", "customer@example.com")
+    amount = detail.get("amount", 0)
+    currency = detail.get("currency", "USD")
+
+    body = (
+        f"Your refund has been processed!\n\n"
+        f"Order ID: {order_id}\n"
+        f"Refund Amount: {currency} {float(amount):.2f}\n\n"
+        f"The refund will be credited to your original payment method within 5-10 business days."
+    )
+
+    send_email(to=email, subject="Refund Processed for Your Order", body=body)
+    logger.info(f"Refund notification sent for order {order_id}")

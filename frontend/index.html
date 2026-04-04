@@ -76,6 +76,20 @@
   .status-CANCELLED{background:#fee2e2;color:#991b1b}
   .status-PAYMENT_PROCESSING{background:#dbeafe;color:#1e40af}
   .status-INVENTORY_RESERVING{background:#fef9c3;color:#854d0e}
+  .status-INVENTORY_RESERVED{background:#fef9c3;color:#854d0e}
+  .status-INVENTORY_FAILED{background:#fee2e2;color:#991b1b}
+  .status-PAYMENT_FAILED{background:#fee2e2;color:#991b1b}
+  .status-COMPENSATING{background:#fef9c3;color:#854d0e}
+  .status-REFUNDED{background:#dbeafe;color:#1e40af}
+
+  /* NOTIFICATION BANNER */
+  .notif-banner{display:none;align-items:center;justify-content:space-between;padding:12px 24px;font-size:14px;font-weight:500;position:sticky;top:56px;z-index:90}
+  .notif-banner.show{display:flex}
+  .notif-banner.success{background:#16a34a;color:#fff}
+  .notif-banner.warning{background:#d97706;color:#fff}
+  .notif-banner.error{background:#dc2626;color:#fff}
+  .notif-banner.info{background:#2563eb;color:#fff}
+  .notif-dismiss{background:transparent;border:none;color:inherit;font-size:20px;cursor:pointer;opacity:.8;padding:0 4px;line-height:1}
   .order-row{cursor:pointer}
   .order-row:hover{background:var(--bg)}
   .order-detail{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-top:12px;display:none}
@@ -153,6 +167,12 @@
   <button class="nav-btn btn-primary btn-sm" id="auth-btn" onclick="openAuth()" style="background:var(--accent);color:#fff;padding:6px 14px;border-radius:var(--radius)">Sign in</button>
   <button class="nav-btn" id="signout-btn" onclick="signOut()" style="display:none">Sign out</button>
 </nav>
+
+<!-- NOTIFICATION BANNER -->
+<div id="notif-banner" class="notif-banner">
+  <span id="notif-msg"></span>
+  <button class="notif-dismiss" onclick="dismissNotif()">✕</button>
+</div>
 
 <!-- PRODUCTS PAGE -->
 <div id="page-products" class="page active">
@@ -715,6 +735,7 @@ async function placeOrder() {
     }
     state.cart = { items: [], subtotal: 0 };
     recalcCart();
+    showNotif("Order placed successfully! You will receive a confirmation email shortly.", "success");
     toast("Order placed! ✓");
     showPage("orders");
   } catch {
@@ -737,6 +758,8 @@ function fmtExpiry(el) {
 }
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
+const CANCELABLE_STATUSES = new Set(['PENDING','INVENTORY_RESERVING','INVENTORY_RESERVED','PAYMENT_PROCESSING','CONFIRMED']);
+
 async function loadOrders() {
   const el = document.getElementById("orders-list");
   const detailEl = document.getElementById("order-detail");
@@ -749,6 +772,7 @@ async function loadOrders() {
     if (!data.orders.length) { el.innerHTML = `<p style="color:var(--muted)">No orders yet.</p>`; return; }
     el.innerHTML = data.orders.map(o => {
       const date = o.createdAt ? new Date(o.createdAt * 1000).toLocaleDateString("en-US", { year:"numeric", month:"short", day:"numeric" }) : "";
+      const canCancel = CANCELABLE_STATUSES.has(o.status);
       return `
       <div class="order-row" onclick="viewOrder('${o.orderId}')">
         <div style="flex:1">
@@ -756,6 +780,7 @@ async function loadOrders() {
           <div class="order-meta">${o.itemCount} item(s) · $${parseFloat(o.total).toFixed(2)}${date ? " · " + date : ""}</div>
         </div>
         <span class="status-pill status-${o.status}">${o.status}</span>
+        ${canCancel ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();cancelOrder('${o.orderId}')">Cancel</button>` : '<span style="width:60px"></span>'}
         <span style="color:var(--muted);font-size:18px">›</span>
       </div>`;
     }).join("");
@@ -823,6 +848,9 @@ async function viewOrder(orderId) {
       ${addrStr ? `<div style="margin-top:12px;font-size:13px;color:var(--muted)">Shipping: ${addrStr}</div>` : ""}
       ${order.payment_id ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">Payment: ${order.payment_id}</div>` : ""}
       ${order.charge_id ? `<div style="font-size:12px;color:var(--muted)">Charge: ${order.charge_id}</div>` : ""}
+      ${CANCELABLE_STATUSES.has(status) ? `<div style="margin-top:20px"><button class="btn btn-danger" onclick="cancelOrder('${orderId}')">Cancel this order</button></div>` : ""}
+      ${status === 'CANCELLED' ? `<div style="margin-top:16px;padding:12px;background:#fee2e2;border-radius:var(--radius);font-size:13px;color:#991b1b">This order has been cancelled. If you were charged, a refund will be issued to your original payment method.</div>` : ""}
+      ${status === 'REFUNDED' ? `<div style="margin-top:16px;padding:12px;background:#dbeafe;border-radius:var(--radius);font-size:13px;color:#1e40af">A refund has been issued to your original payment method.</div>` : ""}
     `;
   } catch {
     detailEl.innerHTML = `
@@ -837,6 +865,29 @@ function closeOrderDetail() {
   const detailEl = document.getElementById("order-detail");
   detailEl.className = "order-detail";
   detailEl.innerHTML = "";
+}
+
+async function cancelOrder(orderId) {
+  if (!confirm(`Cancel order #${orderId.slice(0,8).toUpperCase()}?\n\nIf payment was processed, a refund will be issued.`)) return;
+  try {
+    await apiCall("PUT", `/api/orders/${orderId}/cancel`);
+    showNotif(`Order #${orderId.slice(0,8).toUpperCase()} has been cancelled. A refund will be issued if payment was processed.`, "warning");
+    closeOrderDetail();
+    await loadOrders();
+  } catch(e) {
+    const msg = e.message.includes("409") ? "This order cannot be cancelled (already cancelled)." : "Could not cancel order — please try again.";
+    toast(msg);
+  }
+}
+
+function showNotif(msg, type = "info") {
+  const el = document.getElementById("notif-banner");
+  document.getElementById("notif-msg").textContent = msg;
+  el.className = `notif-banner show ${type}`;
+}
+
+function dismissNotif() {
+  document.getElementById("notif-banner").className = "notif-banner";
 }
 
 // ── PROFILE ───────────────────────────────────────────────────────────────────

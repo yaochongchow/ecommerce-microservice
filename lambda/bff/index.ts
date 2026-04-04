@@ -134,6 +134,26 @@ async function createOrder(userId: string, payload: Record<string, unknown>, cor
   return { statusCode: 201, headers: { 'Content-Type': 'application/json', 'X-Correlation-Id': correlationId }, body: JSON.stringify(order) };
 }
 
+async function cancelOrder(id: string, correlationId: string) {
+  if (!ORDER_API_FN_NAME) return err(501, 'Order service not configured', correlationId);
+  const result = await lambdaClient.send(new InvokeCommand({
+    FunctionName: ORDER_API_FN_NAME,
+    InvocationType: 'RequestResponse',
+    Payload: Buffer.from(JSON.stringify({
+      httpMethod: 'PUT',
+      path: `/orders/${id}/cancel`,
+      pathParameters: { id },
+      headers: { 'X-Correlation-Id': correlationId },
+    })),
+  }));
+  const responsePayload = JSON.parse(new TextDecoder().decode(result.Payload));
+  return {
+    statusCode: responsePayload.statusCode || 200,
+    headers: { 'Content-Type': 'application/json', 'X-Correlation-Id': correlationId },
+    body: responsePayload.body || JSON.stringify(responsePayload),
+  };
+}
+
 async function getOrder(id: string, correlationId: string) {
   if (ORDER_API_FN_NAME) {
     const result = await lambdaClient.send(new InvokeCommand({
@@ -182,6 +202,9 @@ export const handler = async (event: ApiEvent): Promise<unknown> => {
       return createOrder(userId, payload as Record<string, unknown>, correlationId);
     case 'GET /api/orders/{id}':
       return getOrder(params.id ?? '', correlationId);
+    case 'PUT /api/orders/{id}/cancel':
+      if (!userId) return err(401, 'Unauthorized', correlationId);
+      return cancelOrder(params.id ?? '', correlationId);
     default:
       return err(404, 'Route not found', correlationId);
   }

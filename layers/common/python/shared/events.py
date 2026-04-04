@@ -126,9 +126,10 @@ def build_order_confirmed_event(order_id, user_id, items, total_amount, shipping
     }
 
 
-def build_order_cancelled_event(order_id, user_id, reason):
+def build_order_cancelled_event(order_id, user_id, reason, email=None):
     return {
         "orderId": order_id,
         "userId": user_id,
+        "email": email or "customer@example.com",
         "reason": reason,
     }

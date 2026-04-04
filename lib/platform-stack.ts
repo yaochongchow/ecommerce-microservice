@@ -258,7 +258,8 @@ export class PlatformStack extends cdk.Stack {
       ['/api/search',           apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/inventory',        apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/orders',           apigwv2.HttpMethod.POST,   true,  'bff'],
-      ['/api/orders/{id}',      apigwv2.HttpMethod.GET,    true,  'bff'],
+      ['/api/orders/{id}',           apigwv2.HttpMethod.GET,    true,  'bff'],
+      ['/api/orders/{id}/cancel',    apigwv2.HttpMethod.PUT,    true,  'bff'],
     ];
 
     for (const [path, method, auth, target] of routes) {
