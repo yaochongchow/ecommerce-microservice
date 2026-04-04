@@ -120,11 +120,8 @@ export class PlatformStack extends cdk.Stack {
       projectionType: ddb.ProjectionType.ALL,
     });
 
-    const cartsTable = new ddb.Table(this, 'CartsTable', {
-      ...tableDefaults,
-      partitionKey: { name: 'userId', type: ddb.AttributeType.STRING },
-      timeToLiveAttribute: 'expiresAt',
-    });
+    const cartsTableName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/carts-table-name');
+    const cartsTable = ddb.Table.fromTableName(this, 'CartsTableRef', cartsTableName);
 
     const orderRefTable = new ddb.Table(this, 'OrderRefTable', {
       ...tableDefaults,
@@ -172,7 +169,7 @@ export class PlatformStack extends cdk.Stack {
     // ── 9. User service Lambda ────────────────────────────────────────────────
     const userFn = makeFn('UserFn', 'user-service', '/aws/lambda/ecomm-user-service', {
       USERS_TABLE:             usersTable.tableName,
-      CARTS_TABLE:             cartsTable.tableName,
+      CARTS_TABLE:             cartsTableName,
       ORDER_REF_TABLE:         orderRefTable.tableName,
       SESSIONS_TABLE:          sessionsTable.tableName,
       EVENT_BUS_NAME:          eventBusName,
@@ -193,6 +190,7 @@ export class PlatformStack extends cdk.Stack {
     // ── 10. BFF Lambda ────────────────────────────────────────────────────────
     const orderApiFnName    = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-name');
     const productServiceUrl = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/product-service-url');
+    const cartServiceUrl    = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/cart-service-url');
     const inventoryTableName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/inventory-table-name');
     const inventoryTable = ddb.Table.fromTableName(this, 'InventoryTableRef', inventoryTableName);
 
@@ -268,6 +266,25 @@ export class PlatformStack extends cdk.Stack {
         path, methods: [method],
         integration: target === 'user' ? userInt : bffInt,
         ...(auth ? { authorizer: jwtAuthorizer } : {}),
+      });
+    }
+
+    // Go cart service routes (proxied through API Gateway)
+    const cartRoutes: [string, apigwv2.HttpMethod][] = [
+      ['/cart/{userId}',            apigwv2.HttpMethod.GET],
+      ['/cart/create/{userId}',     apigwv2.HttpMethod.POST],
+      ['/cart/add/{userId}',        apigwv2.HttpMethod.POST],
+      ['/cart/update/{userId}',     apigwv2.HttpMethod.PUT],
+      ['/cart/delete/{userId}',     apigwv2.HttpMethod.PUT],
+      ['/cart/deactivate/{userId}', apigwv2.HttpMethod.PUT],
+    ];
+    for (const [cartPath, cartMethod] of cartRoutes) {
+      const intId = `CartInt${cartMethod}${cartPath.replace(/\//g, '_').replace(/[{}]/g, '')}`;
+      httpApi.addRoutes({
+        path: cartPath,
+        methods: [cartMethod],
+        integration: new apigwIntegrations.HttpUrlIntegration(intId, `${cartServiceUrl}${cartPath}`),
+        authorizer: jwtAuthorizer,
       });
     }
 

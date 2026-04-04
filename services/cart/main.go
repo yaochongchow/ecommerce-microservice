@@ -12,14 +12,12 @@ func main() {
 		log.Println("No .env file found, using system environment variables")
 	}
 
-	InitRedis()
-	defer CloseRedis()
-	StartExpiryListener()
+	InitDynamo()
 
 	router := gin.Default()
 
 	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "healthy", "cache": "redis"})
+		c.JSON(200, gin.H{"status": "healthy", "store": "dynamodb"})
 	})
 
 	router.GET("/cart/:userId", getCart)

@@ -557,27 +557,28 @@ async function filterProducts(q) {
 
 // ── CART ──────────────────────────────────────────────────────────────────────
 function addToCart(product) {
-  const items = state.cart.items;
-  const existing = items.find(i => i.productId === product.product_id);
+  const pid = String(product.product_id);
+  const existing = state.cart.items.find(i => i.productId === pid);
   if (existing) {
     existing.quantity++;
   } else {
-    items.push({ productId: product.product_id, name: product.name, price: product.price, quantity: 1, image_url: product.image_url });
+    state.cart.items.push({ productId: pid, quantity: 1 });
   }
   recalcCart();
   toast(`${product.name} added to cart`);
 
-  // If authenticated, sync to backend
-  if (state.idToken) {
-    apiCall("POST", "/api/me/cart", {
-      productId: product.product_id, name: product.name,
-      price: product.price, quantity: 1,
+  if (state.idToken && state.user) {
+    apiCall("POST", `/cart/add/${state.user.sub}`, {
+      product_id: product.product_id, quantity: 1,
     }).catch(() => {});
   }
 }
 
 function recalcCart() {
-  state.cart.subtotal = state.cart.items.reduce((s, i) => s + i.price * i.quantity, 0);
+  state.cart.subtotal = state.cart.items.reduce((s, i) => {
+    const prod = state.products.find(p => String(p.product_id) === String(i.productId));
+    return s + (prod?.price || 0) * i.quantity;
+  }, 0);
   document.getElementById("cart-count").textContent = state.cart.items.reduce((s, i) => s + i.quantity, 0);
 }
 
@@ -585,7 +586,23 @@ function removeFromCart(productId) {
   state.cart.items = state.cart.items.filter(i => i.productId !== productId);
   recalcCart();
   renderCart();
-  if (state.idToken) apiCall("DELETE", `/api/me/cart/${productId}`).catch(() => {});
+  if (state.idToken && state.user) {
+    apiCall("PUT", `/cart/delete/${state.user.sub}`, { product_id: Number(productId) }).catch(() => {});
+  }
+}
+
+function updateCartQuantity(productId, newQty) {
+  if (newQty <= 0) { removeFromCart(productId); return; }
+  const item = state.cart.items.find(i => i.productId === productId);
+  if (!item) return;
+  item.quantity = newQty;
+  recalcCart();
+  renderCart();
+  if (state.idToken && state.user) {
+    apiCall("PUT", `/cart/update/${state.user.sub}`, {
+      product_id: Number(productId), quantity: newQty,
+    }).catch(() => {});
+  }
 }
 
 function renderCart() {
@@ -595,16 +612,27 @@ function renderCart() {
       <button class="btn btn-primary" style="margin-top:16px" onclick="showPage('products')">Start shopping</button></div>`;
     return;
   }
-  el.innerHTML = state.cart.items.map(i => `
+  el.innerHTML = state.cart.items.map(i => {
+    const prod = state.products.find(p => String(p.product_id) === String(i.productId));
+    const name      = prod?.name      || `Product #${i.productId}`;
+    const price     = prod?.price     || 0;
+    const image_url = prod?.image_url || "";
+    return `
     <div class="cart-item">
-      <img class="cart-item-img" src="${i.image_url || ''}" alt="${i.name}" onerror="this.style.visibility='hidden'"/>
+      <img class="cart-item-img" src="${image_url}" alt="${name}" onerror="this.style.visibility='hidden'"/>
       <div class="cart-item-info">
-        <div class="cart-item-name">${i.name}</div>
-        <div class="cart-item-price">$${i.price.toFixed(2)} × ${i.quantity}</div>
+        <div class="cart-item-name">${name}</div>
+        <div class="cart-item-price">$${price.toFixed(2)} each</div>
       </div>
-      <strong>$${(i.price * i.quantity).toFixed(2)}</strong>
-      <button class="btn btn-ghost btn-sm" onclick="removeFromCart('${i.productId}')">✕</button>
-    </div>`).join("") + `
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="updateCartQuantity('${i.productId}', ${i.quantity - 1})" style="padding:4px 10px;font-size:16px">−</button>
+        <span style="min-width:24px;text-align:center;font-weight:600">${i.quantity}</span>
+        <button class="btn btn-ghost btn-sm" onclick="updateCartQuantity('${i.productId}', ${i.quantity + 1})" style="padding:4px 10px;font-size:16px">+</button>
+      </div>
+      <strong>$${(price * i.quantity).toFixed(2)}</strong>
+      <button class="btn btn-ghost btn-sm" onclick="removeFromCart('${i.productId}')" style="color:var(--danger)">✕</button>
+    </div>`;
+  }).join("") + `
     <div class="cart-summary">
       <div class="summary-row"><span>Subtotal</span><span>$${state.cart.subtotal.toFixed(2)}</span></div>
       <div class="summary-row"><span>Shipping</span><span>$0.00</span></div>
@@ -627,15 +655,21 @@ function checkout() {
   document.getElementById("pay-name").value = fullName;
 
   // Render order summary
-  document.getElementById("pay-items").innerHTML = state.cart.items.map(i => `
+  document.getElementById("pay-items").innerHTML = state.cart.items.map(i => {
+    const prod = state.products.find(p => String(p.product_id) === String(i.productId));
+    const name      = prod?.name      || `Product #${i.productId}`;
+    const price     = prod?.price     || 0;
+    const image_url = prod?.image_url || "";
+    return `
     <div style="display:flex;align-items:center;gap:10px">
-      <img class="pay-item-img" src="${i.image_url || ""}" alt="${i.name}" onerror="this.style.visibility='hidden'"/>
+      <img class="pay-item-img" src="${image_url}" alt="${name}" onerror="this.style.visibility='hidden'"/>
       <div style="flex:1;min-width:0">
-        <div style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i.name}</div>
+        <div style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
         <div style="font-size:12px;color:var(--muted)">Qty: ${i.quantity}</div>
       </div>
-      <div style="font-size:14px;font-weight:600">$${(i.price * i.quantity).toFixed(2)}</div>
-    </div>`).join("");
+      <div style="font-size:14px;font-weight:600">$${(price * i.quantity).toFixed(2)}</div>
+    </div>`;
+  }).join("");
 
   const shipping = 0;
   document.getElementById("pay-totals").innerHTML = `
@@ -662,14 +696,25 @@ async function placeOrder() {
   btn.textContent = "Placing order…";
 
   try {
+    const orderItems = state.cart.items.map(i => {
+      const prod = state.products.find(p => String(p.product_id) === String(i.productId));
+      return {
+        productId: i.productId,
+        name:      prod?.name  || `Product #${i.productId}`,
+        price:     prod?.price || 0,
+        quantity:  i.quantity,
+      };
+    });
     await apiCall("POST", "/api/orders", {
-      items:           state.cart.items,
+      items:           orderItems,
       total:           state.cart.subtotal,
       shippingAddress: address,
     });
+    if (state.user) {
+      apiCall("PUT", `/cart/deactivate/${state.user.sub}`).catch(() => {});
+    }
     state.cart = { items: [], subtotal: 0 };
     recalcCart();
-    apiCall("DELETE", "/api/me/cart").catch(() => {});
     toast("Order placed! ✓");
     showPage("orders");
   } catch {
@@ -968,42 +1013,38 @@ async function onSignedIn({ claims, idToken, accessToken }) {
   document.getElementById("orders-nav").style.display  = "";
   document.getElementById("profile-nav").style.display = "";
 
-  // Load persisted cart from backend, then merge any pre-login items
+  // Load persisted cart from Go cart service, then merge any pre-login items
+  const userId = claims.sub;
   try {
-    const data = await apiCall("GET", "/api/me/cart");
+    // GET auto-creates cart if none exists
+    const data = await apiCall("GET", `/cart/${userId}`);
     const backendItems = data.items || [];
-    // Start from backend cart
+    // Start from backend cart (items are {product_id, quantity})
     state.cart.items = backendItems.map(i => ({
-      productId: i.productId,
-      name:      i.name,
-      price:     i.price,
+      productId: String(i.product_id),
       quantity:  i.quantity,
-      image_url: i.imageUrl || "",
     }));
     // Merge pre-login items not already in backend cart
     for (const item of preLoginItems) {
       const existing = state.cart.items.find(i => i.productId === item.productId);
       if (existing) {
         existing.quantity += item.quantity;
-        apiCall("POST", "/api/me/cart", {
-          productId: existing.productId, name: existing.name,
-          price: existing.price, quantity: item.quantity,
+        apiCall("PUT", `/cart/update/${userId}`, {
+          product_id: Number(item.productId), quantity: existing.quantity,
         }).catch(() => {});
       } else {
-        state.cart.items.push(item);
-        apiCall("POST", "/api/me/cart", {
-          productId: item.productId, name: item.name,
-          price: item.price, quantity: item.quantity,
+        state.cart.items.push({ productId: item.productId, quantity: item.quantity });
+        apiCall("POST", `/cart/add/${userId}`, {
+          product_id: Number(item.productId), quantity: item.quantity,
         }).catch(() => {});
       }
     }
   } catch {
     // If fetch fails, keep pre-login items and sync them
-    state.cart.items = preLoginItems;
+    state.cart.items = preLoginItems.map(i => ({ productId: i.productId, quantity: i.quantity }));
     for (const item of preLoginItems) {
-      apiCall("POST", "/api/me/cart", {
-        productId: item.productId, name: item.name,
-        price: item.price, quantity: item.quantity,
+      apiCall("POST", `/cart/add/${userId}`, {
+        product_id: Number(item.productId), quantity: item.quantity,
       }).catch(() => {});
     }
   }

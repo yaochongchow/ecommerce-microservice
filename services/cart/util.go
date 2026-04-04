@@ -1,17 +1,16 @@
 package main
 
-import "time"
-
 type CartItem struct {
-	ProductID int `json:"product_id"`
-	Quantity  int `json:"quantity"`
+	ProductID string `json:"product_id" dynamodbav:"productId"`
+	Quantity  int    `json:"quantity"   dynamodbav:"quantity"`
 }
 
 type Cart struct {
-	CartID     string     `json:"cart_id"`
-	UserID     string     `json:"user_id"`
-	Items      []CartItem `json:"items"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	CheckedOut bool       `json:"checked_out"`
+	UserID     string     `json:"user_id"     dynamodbav:"userId"`
+	CartID     string     `json:"cart_id"     dynamodbav:"cart_id"`
+	Items      []CartItem `json:"items"       dynamodbav:"items"`
+	CreatedAt  int64      `json:"created_at"  dynamodbav:"createdAt"`
+	UpdatedAt  int64      `json:"updated_at"  dynamodbav:"updatedAt"`
+	CheckedOut bool       `json:"checked_out" dynamodbav:"checkedOut"`
+	ExpiresAt  int64      `json:"-"           dynamodbav:"expiresAt"`
 }

@@ -119,33 +119,42 @@ export class ProductCartStack extends cdk.Stack {
       healthCheck: { path: '/health', interval: cdk.Duration.seconds(30) },
     });
 
-    // ── Cart Service (Fargate + Redis sidecar) ───────────────────────────────
+    // ── CartsTable (DynamoDB) ────────────────────────────────────────────────
+    const cartsTable = new dynamodb.Table(this, 'CartsTable', {
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new ssm.StringParameter(this, 'CartsTableNameParam', {
+      parameterName: '/ecommerce/carts-table-name',
+      stringValue: cartsTable.tableName,
+    });
+
+    new ssm.StringParameter(this, 'CartsTableArnParam', {
+      parameterName: '/ecommerce/carts-table-arn',
+      stringValue: cartsTable.tableArn,
+    });
+
+    // ── Cart Service (Fargate) ───────────────────────────────────────────────
     const cartTaskDef = new ecs.FargateTaskDefinition(this, 'CartTask', {
       cpu: 256,
       memoryLimitMiB: 512,
     });
 
-    // Redis sidecar — no portMappings to prevent ALB from health-checking Redis
-    const redisContainer = cartTaskDef.addContainer('redis', {
-      image: ecs.ContainerImage.fromRegistry('redis:alpine'),
-      essential: true,
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'cart-redis' }),
-    });
-
-    const cartContainer = cartTaskDef.addContainer('cart', {
+    cartTaskDef.addContainer('cart', {
       image: ecs.ContainerImage.fromAsset(path.join(__dirname, '../services/cart')),
       essential: true,
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'cart-service' }),
       environment: {
-        REDIS_ADDR: 'localhost:6379',
+        CARTS_TABLE:         cartsTable.tableName,
+        AWS_REGION:          cdk.Stack.of(this).region,
         PRODUCT_SERVICE_URL: `http://${alb.loadBalancerDnsName}`,
       },
       portMappings: [{ containerPort: 8080 }],
     });
-    cartContainer.addContainerDependencies({
-      container: redisContainer,
-      condition: ecs.ContainerDependencyCondition.START,
-    });
+    cartsTable.grantReadWriteData(cartTaskDef.taskRole);
 
     const cartService = new ecs.FargateService(this, 'CartService', {
       cluster,
@@ -168,6 +177,11 @@ export class ProductCartStack extends cdk.Stack {
     new ssm.StringParameter(this, 'ProductServiceUrlParam', {
       parameterName: '/ecommerce/product-service-url',
       stringValue: `http://${alb.loadBalancerDnsName}`,
+    });
+
+    new ssm.StringParameter(this, 'CartServiceUrlParam', {
+      parameterName: '/ecommerce/cart-service-url',
+      stringValue: `http://${alb.loadBalancerDnsName}:8081`,
     });
 
     new cdk.CfnOutput(this, 'ALBDnsName', { value: alb.loadBalancerDnsName });

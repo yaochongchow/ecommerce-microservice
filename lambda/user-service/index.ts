@@ -155,7 +155,7 @@ async function upsertCart(userId: string, body: Record<string, unknown>, cid: st
   const cart = (res.Item as Cart | undefined) ?? { userId, items: [], subtotal: 0, updatedAt: 0, expiresAt: 0 };
   const items: CartItem[] = cart.items ?? [];
 
-  const productId = body.productId as string;
+  const productId = String(body.productId);
   const existing  = items.find(i => i.productId === productId);
 
   if (existing) {
