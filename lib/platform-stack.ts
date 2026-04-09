@@ -221,7 +221,7 @@ export class PlatformStack extends cdk.Stack {
     ordersTable.grantReadData(bffFn);
     sagaStateTable.grantReadData(bffFn);
     paymentsTable.grantReadData(bffFn);
-    shipmentsTable.grantReadData(bffFn);
+    shipmentsTable.grantReadWriteData(bffFn);
     reservationsTable.grantReadData(bffFn);
 
     const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
@@ -283,6 +283,9 @@ export class PlatformStack extends cdk.Stack {
       ['/api/admin/table/{name}',    apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/admin/restock',         apigwv2.HttpMethod.POST,   false, 'bff'],
       ['/api/admin/inventory',       apigwv2.HttpMethod.PUT,    false, 'bff'],
+      ['/api/admin/ship',            apigwv2.HttpMethod.POST,   false, 'bff'],
+      ['/api/admin/shipment',        apigwv2.HttpMethod.PUT,    false, 'bff'],
+      ['/api/admin/orders/{id}/cancel', apigwv2.HttpMethod.PUT, false, 'bff'],
     ];
 
     for (const [path, method, auth, target] of routes) {

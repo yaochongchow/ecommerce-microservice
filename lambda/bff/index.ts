@@ -10,7 +10,7 @@
  *   GET  /api/orders/:id   — order lookup via M2
  */
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand, UpdateCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
@@ -279,6 +279,106 @@ async function adminStats(correlationId: string) {
   }, correlationId);
 }
 
+// ── Shipment management ──────────────────────────────────────────────────────
+
+async function adminCreateShipment(payload: Record<string, unknown>, correlationId: string) {
+  const orderId = payload.orderId as string;
+  const trackingNumber = payload.trackingNumber as string;
+  const carrier = (payload.carrier as string) || 'MANUAL';
+  if (!orderId || !trackingNumber) return err(400, 'orderId and trackingNumber required', correlationId);
+
+  // Check if shipment already exists for this order
+  const existing = await dynamo.send(new QueryCommand({
+    TableName: SHIPMENTS_TABLE,
+    IndexName: 'orderId-index',
+    KeyConditionExpression: 'orderId = :oid',
+    ExpressionAttributeValues: { ':oid': orderId },
+    Limit: 1,
+  }));
+  if (existing.Items?.length) {
+    return err(409, `Shipment already exists for order ${orderId}: ${existing.Items[0].shipmentId}`, correlationId);
+  }
+
+  // Fetch order to get items for the event
+  let orderItems: unknown[] = [];
+  let email = 'customer@example.com';
+  if (ORDER_API_FN_NAME) {
+    try {
+      const res = await lambdaClient.send(new InvokeCommand({
+        FunctionName: ORDER_API_FN_NAME, InvocationType: 'RequestResponse',
+        Payload: Buffer.from(JSON.stringify({ httpMethod: 'GET', path: `/orders/${orderId}`, pathParameters: { id: orderId }, headers: {} })),
+      }));
+      const resp = JSON.parse(new TextDecoder().decode(res.Payload));
+      const body = JSON.parse(resp.body || '{}');
+      orderItems = body.order?.items || [];
+    } catch { /* proceed without items */ }
+  }
+
+  const shipmentId = `shp_${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
+  const now = new Date().toISOString();
+
+  const shipment = {
+    shipmentId, orderId, email, carrier, trackingNumber,
+    status: 'SHIPPED',
+    shippingAddress: {},
+    items: orderItems,
+    createdAt: now,
+  };
+
+  // Write to ShipmentsTable
+  await dynamo.send(new PutCommand({ TableName: SHIPMENTS_TABLE, Item: shipment }));
+
+  // Publish ShipmentCreated event → triggers inventory fulfillment automatically
+  await eb.send(new PutEventsCommand({
+    Entries: [{
+      Source: 'shipping-service',
+      DetailType: 'ShipmentCreated',
+      Detail: JSON.stringify({
+        shipmentId, orderId, email, carrier, trackingNumber,
+        status: 'SHIPPED', items: orderItems, correlationId, timestamp: now,
+      }),
+      EventBusName: EVENT_BUS_NAME,
+    }],
+  }));
+
+  return ok({ message: `Shipment created and fulfillment triggered`, shipment }, correlationId);
+}
+
+async function adminUpdateShipment(payload: Record<string, unknown>, correlationId: string) {
+  const shipmentId = payload.shipmentId as string;
+  const status = payload.status as string;
+  const trackingNumber = payload.trackingNumber as string;
+  if (!shipmentId) return err(400, 'shipmentId required', correlationId);
+
+  const updates: string[] = [];
+  const values: Record<string, unknown> = {};
+  const names: Record<string, string> = {};
+
+  if (status) {
+    updates.push('#s = :s');
+    names['#s'] = 'status';
+    values[':s'] = status;
+  }
+  if (trackingNumber) {
+    updates.push('trackingNumber = :tn');
+    values[':tn'] = trackingNumber;
+  }
+  if (!updates.length) return err(400, 'Nothing to update', correlationId);
+
+  updates.push('updatedAt = :now');
+  values[':now'] = new Date().toISOString();
+
+  await dynamo.send(new UpdateCommand({
+    TableName: SHIPMENTS_TABLE,
+    Key: { shipmentId },
+    UpdateExpression: `SET ${updates.join(', ')}`,
+    ExpressionAttributeValues: values,
+    ...(Object.keys(names).length ? { ExpressionAttributeNames: names } : {}),
+  }));
+
+  return ok({ message: `Shipment ${shipmentId} updated` }, correlationId);
+}
+
 export const handler = async (event: ApiEvent): Promise<unknown> => {
   const correlationId = getCid(event);
   const params = event.pathParameters ?? {};
@@ -318,6 +418,12 @@ export const handler = async (event: ApiEvent): Promise<unknown> => {
       return adminRestock(payload as Record<string, unknown>, correlationId);
     case 'PUT /api/admin/inventory':
       return adminUpdateInventory(payload as Record<string, unknown>, correlationId);
+    case 'POST /api/admin/ship':
+      return adminCreateShipment(payload as Record<string, unknown>, correlationId);
+    case 'PUT /api/admin/shipment':
+      return adminUpdateShipment(payload as Record<string, unknown>, correlationId);
+    case 'PUT /api/admin/orders/{id}/cancel':
+      return cancelOrder(params.id ?? '', correlationId);
     default:
       return err(404, 'Route not found', correlationId);
   }
