@@ -10,7 +10,7 @@
  *   GET  /api/orders/:id   — order lookup via M2
  */
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
@@ -18,6 +18,11 @@ const EVENT_BUS_NAME = process.env.EVENT_BUS_NAME!;
 const ORDER_API_FN_NAME = process.env.ORDER_API_FN_NAME;
 const PRODUCT_SERVICE_URL = process.env.PRODUCT_SERVICE_URL!;
 const INVENTORY_TABLE     = process.env.INVENTORY_TABLE!;
+const ORDERS_TABLE        = process.env.ORDERS_TABLE || 'OrdersTable';
+const SAGA_STATE_TABLE    = process.env.SAGA_STATE_TABLE || 'SagaStateTable';
+const PAYMENTS_TABLE      = process.env.PAYMENTS_TABLE || 'PaymentsTable';
+const SHIPMENTS_TABLE     = process.env.SHIPMENTS_TABLE || 'ShipmentsTable';
+const RESERVATIONS_TABLE  = process.env.RESERVATIONS_TABLE || 'ReservationsTable';
 const eb          = new EventBridgeClient({});
 const lambdaClient = new LambdaClient({});
 const dynamo       = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -177,6 +182,103 @@ async function getOrder(id: string, correlationId: string) {
   return ok({ orderId: id, status: 'PENDING', message: 'Order service not configured' }, correlationId);
 }
 
+// ── Admin helpers ────────────────────────────────────────────────────────────
+
+async function scanTable(tableName: string, limit = 200) {
+  const items: Record<string, unknown>[] = [];
+  let lastKey: Record<string, any> | undefined;
+  do {
+    const res = await dynamo.send(new ScanCommand({
+      TableName: tableName,
+      Limit: limit - items.length,
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(res.Items ?? []));
+    lastKey = res.LastEvaluatedKey as Record<string, any> | undefined;
+  } while (lastKey && items.length < limit);
+  return items;
+}
+
+async function adminListOrders(correlationId: string) {
+  if (ORDER_API_FN_NAME) {
+    const result = await lambdaClient.send(new InvokeCommand({
+      FunctionName: ORDER_API_FN_NAME,
+      InvocationType: 'RequestResponse',
+      Payload: Buffer.from(JSON.stringify({
+        httpMethod: 'GET', path: '/orders', headers: { 'X-Correlation-Id': correlationId },
+      })),
+    }));
+    const resp = JSON.parse(new TextDecoder().decode(result.Payload));
+    return { statusCode: resp.statusCode || 200, headers: { 'Content-Type': 'application/json', 'X-Correlation-Id': correlationId }, body: resp.body || JSON.stringify(resp) };
+  }
+  return ok({ orders: [] }, correlationId);
+}
+
+async function adminScanTable(tableName: string, correlationId: string) {
+  const tableMap: Record<string, string> = {
+    orders: ORDERS_TABLE, saga: SAGA_STATE_TABLE, payments: PAYMENTS_TABLE,
+    shipments: SHIPMENTS_TABLE, inventory: INVENTORY_TABLE, reservations: RESERVATIONS_TABLE,
+  };
+  const resolved = tableMap[tableName] || tableName;
+  const items = await scanTable(resolved);
+  return ok({ table: resolved, count: items.length, items }, correlationId);
+}
+
+async function adminRestock(payload: Record<string, unknown>, correlationId: string) {
+  const productId = payload.productId as string;
+  const quantity = payload.quantity as number;
+  if (!productId || !quantity) return err(400, 'productId and quantity required', correlationId);
+
+  await eb.send(new PutEventsCommand({
+    Entries: [{
+      Source: 'admin-service',
+      DetailType: 'ProductRestocked',
+      Detail: JSON.stringify({ productId, quantity, correlationId, timestamp: new Date().toISOString() }),
+      EventBusName: EVENT_BUS_NAME,
+    }],
+  }));
+  return ok({ message: `Restock event sent: ${quantity} units for product ${productId}` }, correlationId);
+}
+
+async function adminUpdateInventory(payload: Record<string, unknown>, correlationId: string) {
+  const productId = payload.productId as string;
+  const available = payload.available as number;
+  if (!productId || available === undefined) return err(400, 'productId and available required', correlationId);
+
+  await dynamo.send(new UpdateCommand({
+    TableName: INVENTORY_TABLE,
+    Key: { productId },
+    UpdateExpression: 'SET available = :a',
+    ExpressionAttributeValues: { ':a': available },
+  }));
+  return ok({ message: `Inventory for ${productId} set to ${available}` }, correlationId);
+}
+
+async function adminStats(correlationId: string) {
+  const [orders, inventory, payments, shipments] = await Promise.all([
+    scanTable(ORDERS_TABLE), scanTable(INVENTORY_TABLE),
+    scanTable(PAYMENTS_TABLE), scanTable(SHIPMENTS_TABLE),
+  ]);
+
+  const statusCounts: Record<string, number> = {};
+  let totalRevenue = 0;
+  for (const o of orders) {
+    const s = (o as any).status || 'UNKNOWN';
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+    if (s === 'CONFIRMED' || s === 'REFUNDED') totalRevenue += parseFloat((o as any).total_amount || '0');
+  }
+
+  const lowStock = inventory.filter((i: any) => (Number(i.available) || 0) <= 10);
+  const outOfStock = inventory.filter((i: any) => (Number(i.available) || 0) === 0);
+
+  return ok({
+    orders: { total: orders.length, byStatus: statusCounts, totalRevenue },
+    inventory: { total: inventory.length, lowStock: lowStock.length, outOfStock: outOfStock.length },
+    payments: { total: payments.length },
+    shipments: { total: shipments.length },
+  }, correlationId);
+}
+
 export const handler = async (event: ApiEvent): Promise<unknown> => {
   const correlationId = getCid(event);
   const params = event.pathParameters ?? {};
@@ -205,6 +307,17 @@ export const handler = async (event: ApiEvent): Promise<unknown> => {
     case 'PUT /api/orders/{id}/cancel':
       if (!userId) return err(401, 'Unauthorized', correlationId);
       return cancelOrder(params.id ?? '', correlationId);
+    // Admin routes
+    case 'GET /api/admin/orders':
+      return adminListOrders(correlationId);
+    case 'GET /api/admin/stats':
+      return adminStats(correlationId);
+    case 'GET /api/admin/table/{name}':
+      return adminScanTable(params.name ?? '', correlationId);
+    case 'POST /api/admin/restock':
+      return adminRestock(payload as Record<string, unknown>, correlationId);
+    case 'PUT /api/admin/inventory':
+      return adminUpdateInventory(payload as Record<string, unknown>, correlationId);
     default:
       return err(404, 'Route not found', correlationId);
   }

@@ -133,6 +133,45 @@
   .page-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
   .page-btn:disabled{opacity:.4;cursor:default}
 
+  /* ADMIN DASHBOARD */
+  .admin-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:24px}
+  .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+  .stat-card .stat-value{font-size:28px;font-weight:700;color:var(--accent)}
+  .stat-card .stat-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+  .stat-card.warn .stat-value{color:#d97706}
+  .stat-card.danger .stat-value{color:#dc2626}
+  .stat-card.success .stat-value{color:#16a34a}
+
+  .admin-tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+  .admin-tab{padding:8px 16px;border-radius:var(--radius);font-size:13px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);font-weight:500}
+  .admin-tab:hover{background:var(--bg)}
+  .admin-tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+  .admin-table{width:100%;border-collapse:collapse;font-size:13px}
+  .admin-table th{text-align:left;padding:10px 12px;border-bottom:2px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);background:var(--bg)}
+  .admin-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  .admin-table tr:hover{background:var(--bg)}
+  .admin-table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:500px}
+
+  .admin-section{margin-bottom:24px}
+  .admin-section h2{font-size:16px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .admin-section h2 .count{font-size:12px;font-weight:500;background:var(--bg);padding:2px 8px;border-radius:999px;color:var(--muted)}
+
+  .admin-controls{display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:16px}
+  .admin-controls .form-group{margin:0}
+  .admin-controls input,.admin-controls select{padding:8px 12px;font-size:13px}
+
+  .event-log{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;max-height:400px;overflow:auto;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:12px;line-height:1.6}
+  .event-entry{padding:6px 0;border-bottom:1px solid var(--border)}
+  .event-entry:last-child{border:none}
+  .event-time{color:var(--muted);margin-right:8px}
+  .event-type{font-weight:600;padding:1px 6px;border-radius:4px;font-size:11px}
+  .event-type.order{background:#dbeafe;color:#1e40af}
+  .event-type.payment{background:#dcfce7;color:#166534}
+  .event-type.inventory{background:#fef9c3;color:#854d0e}
+  .event-type.shipping{background:#f3e8ff;color:#6b21a8}
+  .event-type.notification{background:#ffe4e6;color:#9f1239}
+
   /* TOAST */
   #toast{position:fixed;bottom:24px;right:24px;background:#1a1a18;color:#fff;padding:12px 18px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:999}
   #toast.show{opacity:1}
@@ -164,6 +203,7 @@
   <button class="nav-btn" onclick="showPage('cart')">Cart <span class="cart-badge" id="cart-count">0</span></button>
   <button class="nav-btn" onclick="showPage('orders')" id="orders-nav" style="display:none">Orders</button>
   <button class="nav-btn" onclick="showPage('profile')" id="profile-nav" style="display:none">Profile</button>
+  <button class="nav-btn" onclick="showPage('admin')">Admin</button>
   <button class="nav-btn btn-primary btn-sm" id="auth-btn" onclick="openAuth()" style="background:var(--accent);color:#fff;padding:6px 14px;border-radius:var(--radius)">Sign in</button>
   <button class="nav-btn" id="signout-btn" onclick="signOut()" style="display:none">Sign out</button>
 </nav>
@@ -309,6 +349,108 @@
   </div>
 </div>
 
+<!-- ADMIN DASHBOARD PAGE -->
+<div id="page-admin" class="page">
+  <div class="page-header">
+    <h1>Admin Dashboard</h1>
+    <button class="btn btn-primary btn-sm" onclick="loadAdmin()">Refresh</button>
+  </div>
+  <p class="page-sub">Monitor orders, inventory, events, and manage stock</p>
+
+  <!-- Stats cards -->
+  <div class="admin-grid" id="admin-stats"></div>
+
+  <!-- Tabs -->
+  <div class="admin-tabs">
+    <button class="admin-tab active" onclick="switchAdminTab('orders',this)">Orders</button>
+    <button class="admin-tab" onclick="switchAdminTab('inventory',this)">Inventory</button>
+    <button class="admin-tab" onclick="switchAdminTab('restock',this)">Restock / Manage</button>
+    <button class="admin-tab" onclick="switchAdminTab('events',this)">Event Log</button>
+    <button class="admin-tab" onclick="switchAdminTab('tables',this)">DynamoDB Tables</button>
+  </div>
+
+  <!-- Orders tab -->
+  <div id="admin-tab-orders" class="admin-section">
+    <h2>All Orders <span class="count" id="admin-orders-count">0</span></h2>
+    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <select id="admin-order-filter" onchange="renderAdminOrders()" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px">
+        <option value="">All statuses</option>
+        <option value="PENDING">PENDING</option>
+        <option value="INVENTORY_RESERVING">INVENTORY_RESERVING</option>
+        <option value="PAYMENT_PROCESSING">PAYMENT_PROCESSING</option>
+        <option value="CONFIRMED">CONFIRMED</option>
+        <option value="CANCELLED">CANCELLED</option>
+        <option value="REFUNDED">REFUNDED</option>
+      </select>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead><tr><th>Order ID</th><th>User</th><th>Items</th><th>Total</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody id="admin-orders-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Inventory tab -->
+  <div id="admin-tab-inventory" class="admin-section" style="display:none">
+    <h2>Inventory Levels <span class="count" id="admin-inv-count">0</span></h2>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead><tr><th>Product ID</th><th>Available</th><th>Reserved</th><th>Status</th><th>Quick Restock</th></tr></thead>
+        <tbody id="admin-inv-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Restock tab -->
+  <div id="admin-tab-restock" class="admin-section" style="display:none">
+    <h2>Inventory Management</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:700px">
+      <div class="payment-card">
+        <h2 style="font-size:15px">Restock Product (via EventBridge)</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Publishes a ProductRestocked event. The inventory service will process it and update stock levels.</p>
+        <div class="form-group"><label>Product ID</label><input id="restock-pid" placeholder="e.g. 1"/></div>
+        <div class="form-group"><label>Quantity to add</label><input id="restock-qty" type="number" placeholder="e.g. 50" min="1"/></div>
+        <button class="btn btn-primary" onclick="doRestock()">Send Restock Event</button>
+      </div>
+      <div class="payment-card">
+        <h2 style="font-size:15px">Set Inventory Directly (DynamoDB)</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Directly updates the available count in the InventoryTable. Use for corrections or emergency overrides.</p>
+        <div class="form-group"><label>Product ID</label><input id="setinv-pid" placeholder="e.g. 1"/></div>
+        <div class="form-group"><label>Available count</label><input id="setinv-qty" type="number" placeholder="e.g. 100" min="0"/></div>
+        <button class="btn btn-primary" onclick="doSetInventory()">Update Inventory</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event log tab -->
+  <div id="admin-tab-events" class="admin-section" style="display:none">
+    <h2>Event Log <span class="count" id="admin-events-count">0</span></h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Reconstructed from saga state transitions and order/payment records. Auto-refreshes every 10s.</p>
+    <div class="event-log" id="admin-event-log">Loading events...</div>
+  </div>
+
+  <!-- DynamoDB tables tab -->
+  <div id="admin-tab-tables" class="admin-section" style="display:none">
+    <h2>DynamoDB Table Browser</h2>
+    <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="admin-table-select" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px">
+        <option value="orders">OrdersTable</option>
+        <option value="saga">SagaStateTable</option>
+        <option value="payments">PaymentsTable</option>
+        <option value="inventory">InventoryTable</option>
+        <option value="reservations">ReservationsTable</option>
+        <option value="shipments">ShipmentsTable</option>
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="loadTableBrowser()">Load</button>
+      <span id="admin-table-info" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+    <div class="admin-table-wrap" id="admin-table-browser">
+      <p style="padding:16px;color:var(--muted);font-size:13px">Select a table and click Load to browse records.</p>
+    </div>
+  </div>
+</div>
+
 <!-- AUTH MODAL -->
 <div class="modal-backdrop" id="auth-modal">
   <div class="modal">
@@ -387,6 +529,7 @@ function showPage(page) {
   if (page === "cart")    renderCart();
   if (page === "orders")  loadOrders();
   if (page === "profile") loadProfile();
+  if (page === "admin")   loadAdmin();
 }
 
 // ── PRODUCTS ──────────────────────────────────────────────────────────────────
@@ -1164,6 +1307,252 @@ function toast(msg) {
   el.textContent = msg; el.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
+}
+
+// ── ADMIN DASHBOARD ──────────────────────────────────────────────────────
+let adminData = { stats: null, orders: [], inventory: [], saga: [], events: [] };
+let adminRefreshTimer = null;
+
+async function loadAdmin() {
+  // Load stats and orders in parallel
+  const [stats, ordersRes, invRes] = await Promise.all([
+    apiCall("GET", "/api/admin/stats").catch(() => null),
+    apiCall("GET", "/api/admin/orders").catch(() => ({ orders: [] })),
+    apiCall("GET", "/api/admin/table/inventory").catch(() => ({ items: [] })),
+  ]);
+
+  adminData.stats = stats;
+  adminData.orders = ordersRes.orders || [];
+  adminData.inventory = invRes.items || [];
+
+  renderAdminStats(stats);
+  renderAdminOrders();
+  renderAdminInventory();
+
+  // Load saga data for events tab in background
+  apiCall("GET", "/api/admin/table/saga").then(res => {
+    adminData.saga = res.items || [];
+    renderAdminEvents();
+  }).catch(() => {});
+
+  // Auto-refresh events every 10s while on admin page
+  clearInterval(adminRefreshTimer);
+  adminRefreshTimer = setInterval(() => {
+    if (!document.getElementById("page-admin").classList.contains("active")) {
+      clearInterval(adminRefreshTimer);
+      return;
+    }
+    // Silently refresh stats
+    apiCall("GET", "/api/admin/stats").then(s => { adminData.stats = s; renderAdminStats(s); }).catch(() => {});
+  }, 10000);
+}
+
+function renderAdminStats(stats) {
+  const el = document.getElementById("admin-stats");
+  if (!stats) { el.innerHTML = '<p style="color:var(--muted)">Could not load stats.</p>'; return; }
+  const o = stats.orders || {};
+  const inv = stats.inventory || {};
+  el.innerHTML = `
+    <div class="stat-card"><div class="stat-value">${o.total || 0}</div><div class="stat-label">Total Orders</div></div>
+    <div class="stat-card success"><div class="stat-value">${o.byStatus?.CONFIRMED || 0}</div><div class="stat-label">Confirmed</div></div>
+    <div class="stat-card warn"><div class="stat-value">${(o.byStatus?.PENDING || 0) + (o.byStatus?.INVENTORY_RESERVING || 0) + (o.byStatus?.PAYMENT_PROCESSING || 0)}</div><div class="stat-label">Processing</div></div>
+    <div class="stat-card danger"><div class="stat-value">${o.byStatus?.CANCELLED || 0}</div><div class="stat-label">Cancelled</div></div>
+    <div class="stat-card"><div class="stat-value">$${(o.totalRevenue || 0).toFixed(2)}</div><div class="stat-label">Revenue</div></div>
+    <div class="stat-card"><div class="stat-value">${inv.total || 0}</div><div class="stat-label">Products Tracked</div></div>
+    <div class="stat-card warn"><div class="stat-value">${inv.lowStock || 0}</div><div class="stat-label">Low Stock</div></div>
+    <div class="stat-card danger"><div class="stat-value">${inv.outOfStock || 0}</div><div class="stat-label">Out of Stock</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.payments?.total || 0}</div><div class="stat-label">Payments</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.shipments?.total || 0}</div><div class="stat-label">Shipments</div></div>
+  `;
+}
+
+function renderAdminOrders() {
+  const filter = document.getElementById("admin-order-filter").value;
+  const filtered = filter ? adminData.orders.filter(o => o.status === filter) : adminData.orders;
+  document.getElementById("admin-orders-count").textContent = filtered.length;
+
+  const body = document.getElementById("admin-orders-body");
+  if (!filtered.length) { body.innerHTML = '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:24px">No orders found</td></tr>'; return; }
+
+  body.innerHTML = filtered.map(o => {
+    const date = o.created_at ? new Date(o.created_at).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }) : "—";
+    const items = Array.isArray(o.items) ? o.items.length : 0;
+    const total = parseFloat(o.total_amount || 0).toFixed(2);
+    const canCancel = ['PENDING','INVENTORY_RESERVING','INVENTORY_RESERVED','PAYMENT_PROCESSING','CONFIRMED'].includes(o.status);
+    return `<tr>
+      <td style="font-family:monospace;font-size:12px" title="${o.order_id}">${o.order_id.slice(0,12)}…</td>
+      <td style="font-size:12px" title="${o.user_id}">${(o.user_id||'').slice(0,8)}…</td>
+      <td>${items}</td>
+      <td>$${total}</td>
+      <td><span class="status-pill status-${o.status}">${o.status}</span></td>
+      <td style="font-size:12px;white-space:nowrap">${date}</td>
+      <td>${canCancel ? `<button class="btn btn-danger btn-sm" onclick="adminCancelOrder('${o.order_id}')">Cancel</button>` : ''}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderAdminInventory() {
+  document.getElementById("admin-inv-count").textContent = adminData.inventory.length;
+  const body = document.getElementById("admin-inv-body");
+  if (!adminData.inventory.length) { body.innerHTML = '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:24px">No inventory data</td></tr>'; return; }
+
+  const sorted = [...adminData.inventory].sort((a, b) => (Number(a.available) || 0) - (Number(b.available) || 0));
+  body.innerHTML = sorted.map(i => {
+    const avail = Number(i.available || 0);
+    const reserved = Number(i.reserved || 0);
+    const status = avail === 0 ? '<span style="color:#dc2626;font-weight:600">OUT OF STOCK</span>'
+                 : avail <= 5 ? '<span style="color:#dc2626;font-weight:600">CRITICAL</span>'
+                 : avail <= 10 ? '<span style="color:#d97706;font-weight:600">LOW</span>'
+                 : '<span style="color:#16a34a;font-weight:500">OK</span>';
+    return `<tr>
+      <td style="font-weight:500">${i.productId}</td>
+      <td style="font-weight:600;${avail <= 10 ? 'color:#dc2626' : ''}">${avail}</td>
+      <td>${reserved}</td>
+      <td>${status}</td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="quickRestock('${i.productId}', 10)">+10</button>
+        <button class="btn btn-ghost btn-sm" onclick="quickRestock('${i.productId}', 50)">+50</button>
+        <button class="btn btn-ghost btn-sm" onclick="quickRestock('${i.productId}', 100)">+100</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+function renderAdminEvents() {
+  const events = [];
+
+  // Build event log from saga state history
+  for (const saga of adminData.saga) {
+    const history = saga.history || [];
+    for (const h of history) {
+      events.push({
+        time: h.timestamp,
+        type: h.to_state,
+        orderId: saga.order_id,
+        detail: h.reason || `${h.from_state} → ${h.to_state}`,
+        source: 'saga',
+      });
+    }
+  }
+
+  // Add order events
+  for (const o of adminData.orders) {
+    events.push({
+      time: o.created_at,
+      type: 'OrderCreated',
+      orderId: o.order_id,
+      detail: `${(o.items||[]).length} items, $${parseFloat(o.total_amount||0).toFixed(2)}`,
+      source: 'order',
+    });
+  }
+
+  events.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+  document.getElementById("admin-events-count").textContent = events.length;
+
+  const el = document.getElementById("admin-event-log");
+  if (!events.length) { el.innerHTML = '<span style="color:var(--muted)">No events found.</span>'; return; }
+
+  el.innerHTML = events.slice(0, 200).map(e => {
+    const time = e.time ? new Date(e.time).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit" }) : "—";
+    const cls = e.source === 'saga'
+      ? (e.type.includes('PAYMENT') ? 'payment' : e.type.includes('INVENTORY') ? 'inventory' : e.type.includes('SHIP') ? 'shipping' : 'order')
+      : e.source;
+    return `<div class="event-entry">
+      <span class="event-time">${time}</span>
+      <span class="event-type ${cls}">${e.type}</span>
+      <span style="margin-left:8px;color:var(--muted);font-size:11px" title="${e.orderId}">${(e.orderId||'').slice(0,8)}</span>
+      <span style="margin-left:8px">${e.detail}</span>
+    </div>`;
+  }).join("");
+}
+
+function switchAdminTab(tab, btn) {
+  document.querySelectorAll("[id^='admin-tab-']").forEach(el => el.style.display = "none");
+  document.querySelectorAll(".admin-tab").forEach(b => b.classList.remove("active"));
+  document.getElementById(`admin-tab-${tab}`).style.display = "";
+  btn.classList.add("active");
+
+  if (tab === "events") renderAdminEvents();
+  if (tab === "inventory") renderAdminInventory();
+}
+
+async function quickRestock(productId, qty) {
+  try {
+    await apiCall("POST", "/api/admin/restock", { productId, quantity: qty });
+    toast(`Restock event sent: +${qty} for product ${productId}`);
+    // Refresh inventory after a short delay (event needs to process)
+    setTimeout(() => loadAdmin(), 2000);
+  } catch { toast("Restock failed"); }
+}
+
+async function doRestock() {
+  const pid = document.getElementById("restock-pid").value.trim();
+  const qty = parseInt(document.getElementById("restock-qty").value);
+  if (!pid || !qty || qty < 1) { toast("Enter valid product ID and quantity"); return; }
+  try {
+    await apiCall("POST", "/api/admin/restock", { productId: pid, quantity: qty });
+    toast(`Restock event sent: +${qty} for product ${pid}`);
+    document.getElementById("restock-pid").value = "";
+    document.getElementById("restock-qty").value = "";
+    setTimeout(() => loadAdmin(), 2000);
+  } catch { toast("Restock failed"); }
+}
+
+async function doSetInventory() {
+  const pid = document.getElementById("setinv-pid").value.trim();
+  const qty = parseInt(document.getElementById("setinv-qty").value);
+  if (!pid || isNaN(qty) || qty < 0) { toast("Enter valid product ID and count"); return; }
+  try {
+    await apiCall("PUT", "/api/admin/inventory", { productId: pid, available: qty });
+    toast(`Inventory for product ${pid} set to ${qty}`);
+    document.getElementById("setinv-pid").value = "";
+    document.getElementById("setinv-qty").value = "";
+    setTimeout(() => loadAdmin(), 1000);
+  } catch { toast("Update failed"); }
+}
+
+async function adminCancelOrder(orderId) {
+  if (!confirm(`Cancel order ${orderId.slice(0,8)}?`)) return;
+  try {
+    await apiCall("PUT", `/api/orders/${orderId}/cancel`);
+    toast("Order cancelled");
+    setTimeout(() => loadAdmin(), 1500);
+  } catch { toast("Cancel failed"); }
+}
+
+async function loadTableBrowser() {
+  const table = document.getElementById("admin-table-select").value;
+  const el = document.getElementById("admin-table-browser");
+  const info = document.getElementById("admin-table-info");
+  el.innerHTML = '<p style="padding:16px;color:var(--muted)">Loading...</p>';
+
+  try {
+    const data = await apiCall("GET", `/api/admin/table/${table}`);
+    const items = data.items || [];
+    info.textContent = `${data.table} — ${items.length} records`;
+
+    if (!items.length) { el.innerHTML = '<p style="padding:16px;color:var(--muted)">Table is empty.</p>'; return; }
+
+    // Collect all unique keys across items
+    const allKeys = new Set();
+    for (const item of items) Object.keys(item).forEach(k => allKeys.add(k));
+    const keys = [...allKeys].sort();
+
+    el.innerHTML = `<table class="admin-table">
+      <thead><tr>${keys.map(k => `<th>${k}</th>`).join("")}</tr></thead>
+      <tbody>${items.slice(0, 100).map(item =>
+        `<tr>${keys.map(k => {
+          let v = item[k];
+          if (v === null || v === undefined) return '<td style="color:var(--muted)">—</td>';
+          if (typeof v === 'object') v = JSON.stringify(v);
+          const s = String(v);
+          return `<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${s.replace(/"/g,'&quot;')}">${s.length > 60 ? s.slice(0,60) + '…' : s}</td>`;
+        }).join("")}</tr>`
+      ).join("")}</tbody>
+    </table>`;
+  } catch {
+    el.innerHTML = '<p style="padding:16px;color:var(--danger)">Failed to load table.</p>';
+  }
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────

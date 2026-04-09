@@ -295,20 +295,23 @@ class TestPaymentsTable:
         idem_table = aws_mock.Table("test-idempotency-keys")
         idem_scan = idem_table.scan()
 
+        # Filter out circuit breaker records (cb:*) from idempotency scan
+        idem_items = [k for k in idem_scan["Items"] if not k["idempotency_key"].startswith("cb:")]
+
         print("========== IDEMPOTENCY KEYS TABLE ==========")
-        for k in idem_scan["Items"]:
+        for k in idem_items:
             print(f"  Key:        {k['idempotency_key']}")
             print(f"  Created At: {k['created_at']}")
             print(f"  TTL:        {k['ttl']}")
             cached = k.get("cached_result", {})
             print(f"  Cached Payment ID: {cached.get('payment_id', 'N/A')}")
-        print(f"\n  Total records: {idem_scan['Count']}")
+        print(f"\n  Total records: {len(idem_items)}")
         print("=============================================\n")
 
         assert scan["Count"] == 1
         assert scan["Items"][0]["order_id"] == "ord_table_test"
         assert scan["Items"][0]["charge_id"].startswith("ch_")
-        assert idem_scan["Count"] == 1
+        assert len(idem_items) == 1
 
     def test_payment_refund_updates_record(self, aws_mock, lambda_context, mocker):
         """Verify the payment record after a refund."""

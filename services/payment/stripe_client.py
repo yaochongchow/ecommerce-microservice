@@ -19,12 +19,18 @@ Why a circuit breaker for Stripe?
   Stripe and our system. The circuit breaker "trips" after consecutive failures,
   giving Stripe time to recover while our Lambda functions fail fast (cheaper
   than waiting for timeouts).
+
+State is stored in DynamoDB (IdempotencyKeysTable) so it is shared across all
+Lambda instances. This means if one instance detects Stripe is down, ALL instances
+stop hammering Stripe immediately rather than each discovering it independently.
 """
 
 import os
 import time
 import uuid
-from enum import Enum
+
+import boto3
+from botocore.exceptions import ClientError
 
 from shared.exceptions import CircuitBreakerOpenError, PaymentFailedError, RefundFailedError
 from shared.logger import get_logger
@@ -39,107 +45,119 @@ stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "sk_test_placeholder")
 
 
 # ---------------------------------------------------------------------------
-# Circuit Breaker Implementation
+# DynamoDB-backed Circuit Breaker (shared across all Lambda instances)
 # ---------------------------------------------------------------------------
 
-
-class CircuitState(Enum):
-    """The three states of a circuit breaker."""
-    CLOSED = "CLOSED"        # Normal operation — requests flow through
-    OPEN = "OPEN"            # Tripped — all requests rejected immediately
-    HALF_OPEN = "HALF_OPEN"  # Testing — one request allowed to check recovery
+IDEMPOTENCY_TABLE = os.environ.get("IDEMPOTENCY_TABLE", "IdempotencyKeysTable")
+_dynamodb = None
 
 
-class CircuitBreaker:
-    """Simple in-memory circuit breaker for external API calls.
+def _get_table():
+    global _dynamodb
+    if _dynamodb is None:
+        _dynamodb = boto3.resource("dynamodb")
+    return _dynamodb.Table(IDEMPOTENCY_TABLE)
 
-    Note: This is per-Lambda-instance. Each Lambda container has its own
-    circuit breaker state. This is fine for our use case — if Stripe is down,
-    each container will independently trip after a few failures.
 
-    For shared state across all containers, you'd use DynamoDB or ElastiCache,
-    but that adds latency to every call and isn't worth it here.
-    """
+# Circuit breaker key stored alongside idempotency keys (different prefix)
+CB_KEY = "cb:stripe"
+CB_FAILURE_THRESHOLD = 5
+CB_RECOVERY_TIMEOUT = 30  # seconds
 
-    def __init__(
-        self,
-        failure_threshold: int = 5,
-        recovery_timeout: int = 30,
-        service_name: str = "stripe",
-    ):
-        """
-        Args:
-            failure_threshold: Number of consecutive failures before tripping.
-            recovery_timeout: Seconds to wait in OPEN state before trying again.
-            service_name: Name for logging purposes.
-        """
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
-        self.service_name = service_name
 
-        # Current state
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time = 0
+def _get_cb_state() -> dict:
+    """Read circuit breaker state from DynamoDB."""
+    try:
+        resp = _get_table().get_item(Key={"idempotency_key": CB_KEY})
+        return resp.get("Item", {})
+    except ClientError:
+        logger.warn("Could not read circuit breaker state — defaulting to CLOSED")
+        return {}
 
-    def can_execute(self) -> bool:
-        """Check if a request is allowed to go through.
 
-        Returns:
-            True if the request should proceed, False if it should be rejected.
-        """
-        if self.state == CircuitState.CLOSED:
-            return True
+def _cb_can_execute() -> bool:
+    """Check if a request is allowed through the circuit breaker."""
+    item = _get_cb_state()
+    state = item.get("cb_state", "CLOSED")
 
-        if self.state == CircuitState.OPEN:
-            # Check if the cooldown period has elapsed
-            elapsed = time.time() - self.last_failure_time
-            if elapsed >= self.recovery_timeout:
-                # Transition to HALF_OPEN — allow one test request
-                self.state = CircuitState.HALF_OPEN
-                logger.info(
-                    "Circuit breaker transitioning to HALF_OPEN",
-                    service=self.service_name,
-                    elapsed_seconds=elapsed,
-                )
-                return True
-            return False
-
-        # HALF_OPEN: allow the test request
+    if state == "CLOSED":
         return True
 
-    def record_success(self):
-        """Record a successful call. Resets the circuit breaker to CLOSED."""
-        if self.state == CircuitState.HALF_OPEN:
-            logger.info("Circuit breaker closing — test request succeeded", service=self.service_name)
+    if state == "OPEN":
+        last_failure = float(item.get("last_failure_time", 0))
+        elapsed = time.time() - last_failure
+        if elapsed >= CB_RECOVERY_TIMEOUT:
+            # Transition to HALF_OPEN — allow one test request
+            try:
+                _get_table().update_item(
+                    Key={"idempotency_key": CB_KEY},
+                    UpdateExpression="SET cb_state = :s",
+                    ConditionExpression="cb_state = :open",
+                    ExpressionAttributeValues={":s": "HALF_OPEN", ":open": "OPEN"},
+                )
+            except ClientError:
+                pass  # Another instance already transitioned
+            logger.info("Circuit breaker transitioning to HALF_OPEN", elapsed_seconds=elapsed)
+            return True
+        return False
 
-        self.failure_count = 0
-        self.state = CircuitState.CLOSED
+    # HALF_OPEN: allow the test request
+    return True
 
-    def record_failure(self):
-        """Record a failed call. May trip the circuit breaker to OPEN."""
-        self.failure_count += 1
-        self.last_failure_time = time.time()
 
-        if self.failure_count >= self.failure_threshold:
-            self.state = CircuitState.OPEN
-            logger.warn(
-                "Circuit breaker OPEN — too many failures",
-                service=self.service_name,
-                failure_count=self.failure_count,
-                recovery_timeout=self.recovery_timeout,
+def _cb_record_success():
+    """Record a successful call — reset circuit breaker to CLOSED."""
+    item = _get_cb_state()
+    if item.get("cb_state") in ("HALF_OPEN", "OPEN"):
+        logger.info("Circuit breaker closing — request succeeded")
+    try:
+        _get_table().put_item(Item={
+            "idempotency_key": CB_KEY,
+            "cb_state": "CLOSED",
+            "failure_count": 0,
+            "last_failure_time": 0,
+        })
+    except ClientError:
+        pass
+
+
+def _cb_record_failure():
+    """Record a failed call — may trip the circuit breaker to OPEN."""
+    now = time.time()
+    try:
+        resp = _get_table().update_item(
+            Key={"idempotency_key": CB_KEY},
+            UpdateExpression=(
+                "SET failure_count = if_not_exists(failure_count, :zero) + :one, "
+                "last_failure_time = :now, "
+                "cb_state = if_not_exists(cb_state, :closed)"
+            ),
+            ExpressionAttributeValues={
+                ":zero": 0, ":one": 1, ":now": int(now), ":closed": "CLOSED",
+            },
+            ReturnValues="ALL_NEW",
+        )
+        attrs = resp["Attributes"]
+        count = int(attrs.get("failure_count", 0))
+        state = attrs.get("cb_state", "CLOSED")
+
+        if count >= CB_FAILURE_THRESHOLD and state != "OPEN":
+            _get_table().update_item(
+                Key={"idempotency_key": CB_KEY},
+                UpdateExpression="SET cb_state = :s",
+                ExpressionAttributeValues={":s": "OPEN"},
             )
-        elif self.state == CircuitState.HALF_OPEN:
-            # Test request failed — go back to OPEN
-            self.state = CircuitState.OPEN
-            logger.warn(
-                "Circuit breaker re-opened — half-open test failed",
-                service=self.service_name,
+            logger.warn("Circuit breaker OPEN — too many failures",
+                         failure_count=count, recovery_timeout=CB_RECOVERY_TIMEOUT)
+        elif state == "HALF_OPEN":
+            _get_table().update_item(
+                Key={"idempotency_key": CB_KEY},
+                UpdateExpression="SET cb_state = :s",
+                ExpressionAttributeValues={":s": "OPEN"},
             )
-
-
-# Global circuit breaker instance (per Lambda container)
-_circuit_breaker = CircuitBreaker()
+            logger.warn("Circuit breaker re-opened — half-open test failed")
+    except ClientError:
+        logger.warn("Could not update circuit breaker state")
 
 
 # ---------------------------------------------------------------------------
@@ -171,18 +189,18 @@ def _retry_with_backoff(operation, *args, **kwargs):
 
     for attempt in range(MAX_RETRIES + 1):
         # Check circuit breaker before each attempt
-        if not _circuit_breaker.can_execute():
+        if not _cb_can_execute():
             raise CircuitBreakerOpenError("stripe")
 
         try:
             result = operation(*args, **kwargs)
-            _circuit_breaker.record_success()
+            _cb_record_success()
             return result
 
         except stripe.RateLimitError as e:
             # Stripe is rate-limiting us — retry with backoff
             last_exception = e
-            _circuit_breaker.record_failure()
+            _cb_record_failure()
             logger.warn(
                 "Rate limited by Stripe — retrying",
                 attempt=attempt + 1,
@@ -192,7 +210,7 @@ def _retry_with_backoff(operation, *args, **kwargs):
         except stripe.APIConnectionError as e:
             # Network issue — retry with backoff
             last_exception = e
-            _circuit_breaker.record_failure()
+            _cb_record_failure()
             logger.warn(
                 "Stripe connection error — retrying",
                 attempt=attempt + 1,
@@ -201,7 +219,7 @@ def _retry_with_backoff(operation, *args, **kwargs):
 
         except stripe.CardError as e:
             # Card declined — this is a permanent error, don't retry
-            _circuit_breaker.record_success()  # Stripe responded, so it's healthy
+            _cb_record_success()  # Stripe responded, so it's healthy
             raise PaymentFailedError(
                 order_id=kwargs.get("metadata", {}).get("order_id", "unknown"),
                 reason=str(e.user_message),
@@ -219,7 +237,7 @@ def _retry_with_backoff(operation, *args, **kwargs):
             time.sleep(delay)
 
     # All retries exhausted
-    _circuit_breaker.record_failure()
+    _cb_record_failure()
     raise last_exception
 
 

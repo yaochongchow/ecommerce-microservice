@@ -111,6 +111,28 @@ def get_order(order_id: str) -> Optional[dict]:
     return response.get("Item")
 
 
+def list_orders(limit: int = 100) -> list[dict]:
+    """Scan all orders, sorted by most recent first.
+
+    Returns:
+        List of order records (capped at limit).
+    """
+    table = _get_table(ORDERS_TABLE)
+    items = []
+    last_key = None
+    while True:
+        kwargs = {"Limit": limit}
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        response = table.scan(**kwargs)
+        items.extend(response.get("Items", []))
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key or len(items) >= limit:
+            break
+    items.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+    return items[:limit]
+
+
 def update_order_status(order_id: str, new_status: str, **extra_fields) -> dict:
     """Update an order's status and optionally set additional fields.
 

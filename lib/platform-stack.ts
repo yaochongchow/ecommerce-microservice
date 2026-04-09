@@ -194,6 +194,13 @@ export class PlatformStack extends cdk.Stack {
     const inventoryTableName = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/inventory-table-name');
     const inventoryTable = ddb.Table.fromTableName(this, 'InventoryTableRef', inventoryTableName);
 
+    // Admin: import additional table references for DynamoDB scanning
+    const ordersTable       = ddb.Table.fromTableName(this, 'OrdersTableRef', 'OrdersTable');
+    const sagaStateTable    = ddb.Table.fromTableName(this, 'SagaStateTableRef', 'SagaStateTable');
+    const paymentsTable     = ddb.Table.fromTableName(this, 'PaymentsTableRef', 'PaymentsTable');
+    const shipmentsTable    = ddb.Table.fromTableName(this, 'ShipmentsTableRef', 'ShipmentsTable');
+    const reservationsTable = ddb.Table.fromTableName(this, 'ReservationsTableRef', 'ReservationsTable');
+
     const bffFn = makeFn('BffFn', 'bff', '/aws/lambda/ecomm-bff', {
       EVENT_BUS_NAME:          eventBusName,
       USER_POOL_ID:            userPool.userPoolId,
@@ -201,11 +208,21 @@ export class PlatformStack extends cdk.Stack {
       ORDER_API_FN_NAME:       orderApiFnName,
       PRODUCT_SERVICE_URL:     productServiceUrl,
       INVENTORY_TABLE:         inventoryTableName,
+      ORDERS_TABLE:            'OrdersTable',
+      SAGA_STATE_TABLE:        'SagaStateTable',
+      PAYMENTS_TABLE:          'PaymentsTable',
+      SHIPMENTS_TABLE:         'ShipmentsTable',
+      RESERVATIONS_TABLE:      'ReservationsTable',
       POWERTOOLS_SERVICE_NAME: 'bff',
     }, 1024);
     userFn.grantInvoke(bffFn);
     eventBus.grantPutEventsTo(bffFn);
-    inventoryTable.grantReadData(bffFn);
+    inventoryTable.grantReadWriteData(bffFn);
+    ordersTable.grantReadData(bffFn);
+    sagaStateTable.grantReadData(bffFn);
+    paymentsTable.grantReadData(bffFn);
+    shipmentsTable.grantReadData(bffFn);
+    reservationsTable.grantReadData(bffFn);
 
     const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
     const orderApiFn = lambda.Function.fromFunctionAttributes(this, 'OrderApiFn', {
@@ -260,6 +277,12 @@ export class PlatformStack extends cdk.Stack {
       ['/api/orders',           apigwv2.HttpMethod.POST,   true,  'bff'],
       ['/api/orders/{id}',           apigwv2.HttpMethod.GET,    true,  'bff'],
       ['/api/orders/{id}/cancel',    apigwv2.HttpMethod.PUT,    true,  'bff'],
+      // Admin routes
+      ['/api/admin/orders',          apigwv2.HttpMethod.GET,    false, 'bff'],
+      ['/api/admin/stats',           apigwv2.HttpMethod.GET,    false, 'bff'],
+      ['/api/admin/table/{name}',    apigwv2.HttpMethod.GET,    false, 'bff'],
+      ['/api/admin/restock',         apigwv2.HttpMethod.POST,   false, 'bff'],
+      ['/api/admin/inventory',       apigwv2.HttpMethod.PUT,    false, 'bff'],
     ];
 
     for (const [path, method, auth, target] of routes) {

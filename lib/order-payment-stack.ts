@@ -148,6 +148,11 @@ export class OrderPaymentStack extends cdk.Stack {
       eventPattern: { source: ['inventory-service'], detailType: ['InventoryReleased'] },
       targets: [new targets.SqsQueue(orderQueue)],
     });
+    new events.Rule(this, 'PaymentRefundedRule', {
+      eventBus, ruleName: 'order-payment-refunded',
+      eventPattern: { source: ['payment-service'], detailType: ['PaymentRefunded'] },
+      targets: [new targets.SqsQueue(orderQueue)],
+    });
 
     // ── Payment Event Lambda ─────────────────────────────────────────────────
     const paymentEventFn = new lambda.Function(this, 'PaymentEventFunction', {

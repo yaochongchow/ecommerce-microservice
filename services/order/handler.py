@@ -14,7 +14,7 @@ from shared.logger import get_logger
 
 import saga
 from compensation import handle_inventory_released
-from models import create_order, create_saga_state, get_order, update_order_status
+from models import create_order, create_saga_state, get_order, list_orders, update_order_status
 
 logger = get_logger("order-service")
 
@@ -48,6 +48,8 @@ def api_handler(event, context):
     try:
         if http_method == "POST" and path == "/orders":
             return _handle_create_order(event, correlation_id)
+        if http_method == "GET" and path == "/orders":
+            return _handle_list_orders()
         if http_method == "GET" and "id" in path_params:
             return _handle_get_order(path_params["id"])
         if http_method == "PUT" and path.endswith("/cancel") and "id" in path_params:
@@ -60,6 +62,11 @@ def api_handler(event, context):
     except Exception as e:
         logger.error("Unhandled error", error=str(e), traceback=traceback.format_exc())
         return _response(500, {"error_code": "INTERNAL_ERROR", "message": "Internal server error"})
+
+
+def _handle_list_orders():
+    orders = list_orders(limit=200)
+    return _response(200, {"orders": orders})
 
 
 def _handle_create_order(event, correlation_id):
@@ -174,6 +181,12 @@ def event_handler(event, context):
                 order_id=detail["orderId"],
                 correlation_id=correlation_id,
             )
+        elif detail_type == "PaymentRefunded":
+            order_id = detail["orderId"]
+            update_order_status(order_id, "REFUNDED",
+                                refund_id=detail.get("refundId"),
+                                refund_amount=detail.get("amount"))
+            logger.info("Order marked as refunded", order_id=order_id, refund_id=detail.get("refundId"))
         else:
             logger.warn("Unknown event type", detail_type=detail_type)
 
