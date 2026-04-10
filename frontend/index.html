@@ -1193,7 +1193,7 @@ async function signUp() {
   const email = document.getElementById("su-email").value.trim();
   const pass  = document.getElementById("su-pass").value;
   if (!first || !email || !pass) { showAlert("Please fill all fields", "error"); return; }
-  if (pass.length < 5)           { showAlert("Password must be at least 5 characters", "error"); return; }
+  if (pass.length < 8)           { showAlert("Password must be at least 8 characters", "error"); return; }
   try {
     await cognitoReq("SignUp", {
       ClientId: CONFIG.clientId,
