@@ -203,7 +203,7 @@
   <button class="nav-btn" onclick="showPage('cart')">Cart <span class="cart-badge" id="cart-count">0</span></button>
   <button class="nav-btn" onclick="showPage('orders')" id="orders-nav" style="display:none">Orders</button>
   <button class="nav-btn" onclick="showPage('profile')" id="profile-nav" style="display:none">Profile</button>
-  <button class="nav-btn" onclick="showPage('admin')">Admin</button>
+  <button class="nav-btn" onclick="showPage('admin')" id="admin-nav" style="display:none">Admin</button>
   <button class="nav-btn btn-primary btn-sm" id="auth-btn" onclick="openAuth()" style="background:var(--accent);color:#fff;padding:6px 14px;border-radius:var(--radius)">Sign in</button>
   <button class="nav-btn" id="signout-btn" onclick="signOut()" style="display:none">Sign out</button>
 </nav>
@@ -1193,7 +1193,7 @@ async function signUp() {
   const email = document.getElementById("su-email").value.trim();
   const pass  = document.getElementById("su-pass").value;
   if (!first || !email || !pass) { showAlert("Please fill all fields", "error"); return; }
-  if (pass.length < 8)           { showAlert("Password must be at least 8 characters", "error"); return; }
+  if (pass.length < 5)           { showAlert("Password must be at least 5 characters", "error"); return; }
   try {
     await cognitoReq("SignUp", {
       ClientId: CONFIG.clientId,
@@ -1245,6 +1245,7 @@ async function onSignedIn({ claims, idToken, accessToken }) {
   document.getElementById("signout-btn").style.display = "";
   document.getElementById("orders-nav").style.display  = "";
   document.getElementById("profile-nav").style.display = "";
+  document.getElementById("admin-nav").style.display   = claims.email === "admin@admin.com" ? "" : "none";
 
   // Load persisted cart from Go cart service, then merge any pre-login items
   const userId = claims.sub;
@@ -1293,6 +1294,7 @@ function signOut() {
   document.getElementById("signout-btn").style.display = "none";
   document.getElementById("orders-nav").style.display  = "none";
   document.getElementById("profile-nav").style.display = "none";
+  document.getElementById("admin-nav").style.display   = "none";
   showPage("products");
   toast("Signed out");
 }

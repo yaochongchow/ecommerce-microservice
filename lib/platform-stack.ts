@@ -85,7 +85,7 @@ export class PlatformStack extends cdk.Stack {
       selfSignUpEnabled: true,
       signInAliases: { email: true },
       passwordPolicy: {
-        minLength: 8,
+        minLength: 5,
         requireLowercase: false,
         requireUppercase: false,
         requireDigits: false,
