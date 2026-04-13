@@ -18,6 +18,7 @@ A production-grade, event-driven e-commerce platform built with **7 independentl
   - [Product Service](#product-service-go--ecs-fargate)
   - [Cart Service](#cart-service-go--ecs-fargate--redis)
 - [Platform Layer](#platform-layer)
+- [Admin Dashboard](#admin-dashboard)
 - [Event-Driven Architecture](#event-driven-architecture)
 - [Saga Orchestration](#saga-orchestration)
 - [Key Design Patterns](#key-design-patterns)
@@ -120,9 +121,11 @@ The **orchestrator** of the entire order lifecycle. Exposes an HTTP API for orde
 
 **Responsibilities:**
 - Create orders with idempotency keys
-- Drive saga state transitions (PENDING → INVENTORY_RESERVING → PAYMENT_PROCESSING → CONFIRMED)
+- Drive saga state transitions (PENDING → INVENTORY_RESERVING → PAYMENT_PROCESSING → CONFIRMED → REFUNDED)
 - Handle failure compensation (publish `CompensateInventory` / `CompensatePayment` events)
 - Cancel confirmed orders
+- Handle `PaymentRefunded` events to mark orders as REFUNDED
+- Expose `GET /orders` for admin listing of all orders (up to 200, sorted by recency)
 
 ---
 
@@ -138,8 +141,8 @@ Processes charges and refunds with **exactly-once semantics** through a custom i
 | Data models | `services/payment/models.py` | Payment record CRUD |
 
 **Key features:**
-- **Double idempotency protection** — DynamoDB cache + Stripe idempotency keys
-- **Circuit breaker** — Rejects calls when Stripe is unavailable (publishes `PaymentFailed`)
+- **Double idempotency protection** — DynamoDB cache + Stripe idempotency keys prevents duplicate charges (`idempotency.py`)
+- **Shared DynamoDB-backed circuit breaker** — State (`CLOSED`/`OPEN`/`HALF_OPEN`) stored in `IdempotencyKeysTable` under the key `cb:stripe`, shared across all Lambda instances. Threshold: 5 failures opens the circuit for 30 s, then enters HALF_OPEN for a single probe. Rejects calls when Stripe is unavailable and publishes `PaymentFailed`.
 - **Mock mode** — Default `PAYMENT_MODE=mock` for development without a Stripe account
 
 ---
@@ -172,6 +175,11 @@ Creates shipments when orders are confirmed. Idempotent — duplicate `OrderConf
 |---|---|---|
 | Event handler | `services/shipping/handler.py` | Processes `OrderConfirmed` events |
 | Business logic | `services/shipping/service.py` | Creates shipment records with tracking numbers |
+| Repository | `services/shipping/repository.py` | DynamoDB CRUD with `orderId-index` GSI |
+
+**Shipment lifecycle:** `CREATED` → `SHIPPED` → `DELIVERED`
+
+Shipments can also be created and progressed manually by the admin. When a shipment transitions to `SHIPPED`, a `ShipmentCreated` event is published to EventBridge, which triggers the Inventory Service to mark all reservations as `FULFILLED` and reduce the reserved count.
 
 ---
 
@@ -241,6 +249,7 @@ A Node.js Lambda that aggregates downstream services behind a single API:
 - Invokes the Order Service Lambda directly
 - Reads inventory data from DynamoDB
 - Propagates **correlation IDs** through all downstream calls
+- Hosts all **unauthenticated admin endpoints** (`/api/admin/*`) — see [Admin Dashboard](#admin-dashboard)
 
 ### User Service
 Manages user profiles, carts (DynamoDB-backed with 7-day TTL), and order history. Subscribes to `OrderCreated`, `OrderConfirmed`, and `OrderCanceled` events to maintain an order reference index.
@@ -252,6 +261,51 @@ Single-page application served via S3 + CloudFront. Auto-configured with API URL
 - **CloudWatch Alarms** — BFF/User error rates (>5 errors) and p99 latency (>3s)
 - **DLQ monitoring** — Alarm when dead-letter queues receive messages
 - **Structured JSON logging** — All services emit `{timestamp, level, service, correlation_id, message}` via shared logger
+
+---
+
+## Admin Dashboard
+
+A built-in operations dashboard accessible from the frontend SPA. Visible **only** to the admin account (`admin@admin.com` / `Admin123`).
+
+### Access
+
+The **Admin** navigation button in the SPA header is hidden for all regular users. It appears automatically after sign-in when the authenticated email matches `admin@admin.com`. It is hidden again on sign-out.
+
+### Tabs
+
+| Tab | Description |
+|---|---|
+| **Overview** | Live stats — total orders, revenue, pending/confirmed/cancelled counts, inventory items, active reservations |
+| **Orders** | Full order list with status badges; cancel any order directly from the dashboard |
+| **Inventory** | Per-product stock levels with quick-restock and set-exact-quantity controls |
+| **Restock / Manage** | Publish a `ProductRestocked` event to EventBridge with a specific product ID and quantity delta |
+| **Shipments** | Create shipments for CONFIRMED orders, enter tracking numbers, advance status (CREATED → SHIPPED → DELIVERED) |
+| **Event Log** | Reconstructed timeline of saga events from `SagaStateTable` history |
+| **DynamoDB Tables** | Raw table browser — scan any of the 7 core tables (Orders, SagaState, Payments, Inventory, Reservations, Shipments, Idempotency) |
+
+### Shipment Management
+
+1. Select a CONFIRMED order from the dropdown in the Shipments tab.
+2. Choose a carrier (UPS / FedEx / USPS / DHL) and enter a tracking number.
+3. Click **Create Shipment** — the BFF writes a record to `ShipmentsTable` and publishes a `ShipmentCreated` event to EventBridge.
+4. The Inventory Service automatically handles `ShipmentCreated`: marks all reservations for that order as `FULFILLED` and decrements the reserved count in `InventoryTable`.
+5. Use **Update Status** to advance the shipment through `CREATED → SHIPPED → DELIVERED`.
+
+### Admin API Routes (No Auth Required)
+
+All admin routes are served by the BFF Lambda without a JWT authorizer so they can be called from the admin SPA page without token scoping issues.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/orders` | List all orders (scans OrdersTable) |
+| `GET` | `/api/admin/stats` | Aggregate counts and revenue totals |
+| `GET` | `/api/admin/table/{name}` | Scan a raw DynamoDB table by logical name |
+| `POST` | `/api/admin/restock` | Publish `ProductRestocked` event to EventBridge |
+| `PUT` | `/api/admin/inventory` | Directly set a product's stock quantity in DynamoDB |
+| `POST` | `/api/admin/ship` | Create a shipment + publish `ShipmentCreated` |
+| `PUT` | `/api/admin/shipment` | Update shipment status / tracking number |
+| `POST` | `/api/admin/orders/{id}/cancel` | Cancel an order (no JWT required) |
 
 ---
 
@@ -271,7 +325,7 @@ All inter-service communication flows through a central **EventBridge bus** (`ec
 | `order-service` | `CompensatePayment` | Payment | Saga rollback — refund charge |
 | `payment-service` | `PaymentSucceeded` | Order | Charge completed |
 | `payment-service` | `PaymentFailed` | Order | Charge failed — trigger compensation |
-| `payment-service` | `PaymentRefunded` | — | Refund completed (logged) |
+| `payment-service` | `PaymentRefunded` | Order | Refund completed — marks order status as REFUNDED |
 | `inventory-service` | `InventoryReserved` | Order | Stock reserved for order |
 | `inventory-service` | `InventoryReservationFailed` | Order | Insufficient stock |
 | `inventory-service` | `InventoryReleased` | Order | Stock released after compensation |
@@ -307,9 +361,13 @@ User places order
   [CONFIRMED]
        |  publish: OrderConfirmed
        v
-  Shipping creates shipment
-  Notification sends confirmation email
-  Inventory marks items as fulfilled
+  Shipping creates shipment            Admin can manually ship order
+  Notification sends confirmation      → publish: ShipmentCreated
+  Inventory marks items as fulfilled   → Inventory: RESERVED → FULFILLED
+       |
+       |  (on CompensatePayment → refund)
+       v
+  [REFUNDED]  ← receive: PaymentRefunded
 ```
 
 ### Failure & Compensation
@@ -342,7 +400,7 @@ User places order
 |---|---|---|
 | **Saga (Orchestration)** | Order Service | State machine in `saga.py` drives multi-step workflow; `compensation.py` handles rollbacks |
 | **Idempotency** | Payment Service | DynamoDB key cache + Stripe native idempotency prevents duplicate charges (`idempotency.py`) |
-| **Circuit Breaker** | Payment Service | `stripe_client.py` rejects calls when provider is unavailable, returns `503` |
+| **Circuit Breaker** | Payment Service | `stripe_client.py` — state stored in DynamoDB (`IdempotencyKeysTable`, key `cb:stripe`), shared across all Lambda instances. Prevents cascading failures when Stripe is down. |
 | **Optimistic Locking** | Inventory Service | DynamoDB `TransactWriteItems` with conditional expressions prevents overselling |
 | **Event Sourcing (lite)** | Order Service | `SagaStateTable` records all state transitions with timestamps |
 | **CQRS (lite)** | User Service | `OrderRefTable` provides a read-optimized order history index |
@@ -370,6 +428,7 @@ User places order
 |---|---|---|---|
 | `POST` | `/api/orders` | BFF → Order Svc | Create order (triggers saga) |
 | `GET` | `/api/orders/{id}` | BFF → Order Svc | Order status and details |
+| `POST` | `/api/orders/{id}/cancel` | BFF → Order Svc | Cancel order (requires JWT) |
 | `GET` | `/api/me` | User Service | Get user profile |
 | `PUT` | `/api/me` | User Service | Update profile |
 | `GET` | `/api/me/cart` | User Service | Get shopping cart |
@@ -377,6 +436,19 @@ User places order
 | `DELETE` | `/api/me/cart` | User Service | Clear cart |
 | `DELETE` | `/api/me/cart/{itemId}` | User Service | Remove cart item |
 | `GET` | `/api/me/orders` | User Service | Order history |
+
+### Admin Endpoints (No Auth — admin SPA only)
+
+| Method | Path | Handler | Description |
+|---|---|---|---|
+| `GET` | `/api/admin/orders` | BFF | List all orders |
+| `GET` | `/api/admin/stats` | BFF | Aggregate stats (counts, revenue) |
+| `GET` | `/api/admin/table/{name}` | BFF | Scan raw DynamoDB table |
+| `POST` | `/api/admin/restock` | BFF → EventBridge | Publish ProductRestocked event |
+| `PUT` | `/api/admin/inventory` | BFF → DynamoDB | Set product stock quantity |
+| `POST` | `/api/admin/ship` | BFF → DynamoDB + EventBridge | Create shipment + publish ShipmentCreated |
+| `PUT` | `/api/admin/shipment` | BFF → DynamoDB | Update shipment status / tracking |
+| `POST` | `/api/admin/orders/{id}/cancel` | BFF → Order Svc | Cancel order (no JWT required) |
 
 **CORS:** All origins (`*`), methods (GET/POST/PUT/DELETE/OPTIONS), headers (Authorization, Content-Type, X-Idempotency-Key, X-Correlation-Id)
 
@@ -429,7 +501,7 @@ SharedStack (EventBridge bus, SSM params)
 | Stack | Resources | Description |
 |---|---|---|
 | **SharedStack** | EventBridge bus, 2 SSM params | Shared event infrastructure |
-| **OrderPaymentStack** | 3 Lambdas, 4 DynamoDB tables, 2 SQS queues + DLQs, 6 EventBridge rules | Order saga + payment processing |
+| **OrderPaymentStack** | 3 Lambdas, 4 DynamoDB tables, 2 SQS queues + DLQs, 7 EventBridge rules | Order saga + payment processing (includes `PaymentRefunded` → Order rule) |
 | **ProductCartStack** | VPC (2 AZs), ECS cluster, 2 Fargate services, ALB, DynamoDB, S3 | Product catalog + cart (containers) |
 | **PlatformStack** | API Gateway, Cognito, 4 Lambdas, 4 DynamoDB tables, S3, CloudFront, CloudWatch alarms | API layer + auth + frontend |
 | **InventoryStack** | 1 Lambda, 2 DynamoDB tables, SQS + DLQ, 7 EventBridge rules | Stock management |
@@ -638,6 +710,9 @@ See [DEMO.md](DEMO.md) for detailed step-by-step instructions including:
 4. Watching events propagate through CloudWatch logs
 5. Checking order status and history
 6. Using the frontend SPA
+7. Signing in as `admin@admin.com` to access the Admin Dashboard
+8. Using the Shipments tab to manually enter a tracking number and mark an order as shipped
+9. Verifying inventory reservations are fulfilled automatically after shipment
 
 ### Quick API Test
 
@@ -677,6 +752,9 @@ curl -s -X POST "$API_URL/api/orders" \
 | CORS errors in browser | API Gateway config | Current config allows `*` origins — check API Gateway CORS settings |
 | CDK deploy fails with "resource exists" | Orphaned resources from prior deploy | Delete the conflicting resource in AWS Console, then retry |
 | DLQ messages accumulating | Service processing failures | Inspect DLQ messages for error details; check corresponding service CloudWatch logs |
+| Admin button not visible | Signed in as non-admin account | Sign in as `admin@admin.com` — the Admin nav button only appears for that exact email |
+| Shipment creation fails | No CONFIRMED orders in dropdown | Place an order and wait for saga to reach CONFIRMED state before using the Shipments tab |
+| Circuit breaker stuck OPEN | Stripe failures exceeded threshold | The `cb:stripe` record in `IdempotencyKeysTable` holds the circuit state; it auto-recovers after 30 s in HALF_OPEN |
 
 ### Tear Down
 
