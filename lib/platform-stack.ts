@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigwIntegrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
@@ -223,6 +224,21 @@ export class PlatformStack extends cdk.Stack {
     paymentsTable.grantReadData(bffFn);
     shipmentsTable.grantReadWriteData(bffFn);
     reservationsTable.grantReadData(bffFn);
+
+    // Table.fromTableName() does not carry GSI metadata, so CDK's grant helpers
+    // only cover the table ARN. Add an explicit statement for all indexes so
+    // Query on GSIs (e.g. ShipmentsTable/index/orderId-index) is allowed.
+    bffFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Query', 'dynamodb:Scan'],
+      resources: [
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/ShipmentsTable/index/*`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/InventoryTable/index/*`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/OrdersTable/index/*`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/PaymentsTable/index/*`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/ReservationsTable/index/*`,
+        `arn:aws:dynamodb:${this.region}:${this.account}:table/SagaStateTable/index/*`,
+      ],
+    }));
 
     const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
     const orderApiFn = lambda.Function.fromFunctionAttributes(this, 'OrderApiFn', {
