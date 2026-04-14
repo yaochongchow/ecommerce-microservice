@@ -4,7 +4,7 @@ A production-grade, event-driven e-commerce platform built with **7 independentl
 
 ## 1-Minute Demo (GIF)
 
-![Observability Demo](docs/demo/observability-demo.gif)
+![Observability Demo](docs/demo/observability-demo-v2.gif)
 
 ---
 
