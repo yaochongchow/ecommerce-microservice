@@ -2,6 +2,10 @@
 
 A production-grade, event-driven e-commerce platform built with **7 independently deployable microservices**, orchestrated through the **Saga pattern** for distributed transactions. Deployed on AWS using CDK Infrastructure as Code across Lambda, ECS Fargate, DynamoDB, EventBridge, and more.
 
+## 1-Minute Demo (GIF)
+
+![Observability Demo](docs/demo/observability-demo.gif)
+
 ---
 
 ## Table of Contents
@@ -237,10 +241,6 @@ A built-in operations dashboard accessible from the frontend SPA. Visible **only
 ### Access
 
 The **Admin** navigation button in the SPA header is hidden for all regular users. It appears automatically after sign-in when the authenticated email matches `admin@admin.com`. It is hidden again on sign-out.
-
-### 1-Minute Demo (GIF)
-
-![Observability Demo](docs/demo/observability-demo.gif)
 
 ### Tabs
 
