@@ -108,128 +108,94 @@ ShopCloud follows a **polyglot microservices architecture** where each service o
 
 ## Services
 
-### Order Service (Python / Lambda)
+ShopCloud has **7 microservices**. Expand each one only when you need details.
 
-The **orchestrator** of the entire order lifecycle. Exposes an HTTP API for order creation and manages distributed transactions through the Saga pattern.
-
-| Component | File | Purpose |
+| Service | Runtime | Main job |
 |---|---|---|
-| HTTP API handler | `services/order/handler.py` | POST/GET/PUT `/orders` |
-| Saga state machine | `services/order/saga.py` | Orchestrates inventory + payment steps |
-| Compensation logic | `services/order/compensation.py` | Rollback on failure (release stock, refund) |
-| Data models | `services/order/models.py` | DynamoDB CRUD with conditional writes |
+| Order | Python / Lambda | Orchestrates order saga |
+| Payment | Python / Lambda | Charges and refunds safely |
+| Inventory | Python / Lambda | Reserves and tracks stock |
+| Shipping | Python / Lambda | Creates and updates shipments |
+| Notification | Python / Lambda | Sends order emails |
+| Product | Go / ECS Fargate | Serves product catalog |
+| Cart | Go / ECS Fargate + Redis | Manages shopping carts |
 
-**Responsibilities:**
-- Create orders with idempotency keys
-- Drive saga state transitions (PENDING → INVENTORY_RESERVING → PAYMENT_PROCESSING → CONFIRMED → REFUNDED)
-- Handle failure compensation (publish `CompensateInventory` / `CompensatePayment` events)
-- Cancel confirmed orders
-- Handle `PaymentRefunded` events to mark orders as REFUNDED
-- Expose `GET /orders` for admin listing of all orders (up to 200, sorted by recency)
+<details>
+<summary><strong>Order Service (Python / Lambda)</strong></summary>
 
----
+Creates orders and drives the full order workflow.
 
-### Payment Service (Python / Lambda)
+- APIs: `POST /orders`, `GET /orders/{id}`, `PUT /orders/{id}/cancel`, `GET /orders`
+- Main files: `services/order/handler.py`, `services/order/saga.py`, `services/order/compensation.py`
+- Publishes and reacts to saga events through EventBridge
 
-Processes charges and refunds with **exactly-once semantics** through a custom idempotency layer backed by DynamoDB + Stripe's native idempotency.
+</details>
 
-| Component | File | Purpose |
-|---|---|---|
-| Event handler | `services/payment/handler.py` | Processes `OrderReadyForPayment` and `CompensatePayment` events |
-| Idempotency wrapper | `services/payment/idempotency.py` | Prevents duplicate charges via DynamoDB key cache |
-| Stripe client | `services/payment/stripe_client.py` | Stripe API with circuit breaker pattern |
-| Data models | `services/payment/models.py` | Payment record CRUD |
+<details>
+<summary><strong>Payment Service (Python / Lambda)</strong></summary>
 
-**Key features:**
-- **Double idempotency protection** — DynamoDB cache + Stripe idempotency keys prevents duplicate charges (`idempotency.py`)
-- **Shared DynamoDB-backed circuit breaker** — State (`CLOSED`/`OPEN`/`HALF_OPEN`) stored in `IdempotencyKeysTable` under the key `cb:stripe`, shared across all Lambda instances. Threshold: 5 failures opens the circuit for 30 s, then enters HALF_OPEN for a single probe. Rejects calls when Stripe is unavailable and publishes `PaymentFailed`.
-- **Mock mode** — Default `PAYMENT_MODE=mock` for development without a Stripe account
+Handles payment charge/refund steps for the saga.
 
----
+- Triggered by events like `OrderReadyForPayment` and `CompensatePayment`
+- Main files: `services/payment/handler.py`, `services/payment/idempotency.py`, `services/payment/stripe_client.py`
+- Supports mock mode by default (`PAYMENT_MODE=mock`)
 
-### Inventory Service (Python / Lambda)
+</details>
 
-Manages product stock levels with **atomic reservations** using DynamoDB transactions to prevent overselling.
+<details>
+<summary><strong>Inventory Service (Python / Lambda)</strong></summary>
 
-| Component | File | Purpose |
-|---|---|---|
-| Event handler | `services/inventory/handler.py` | Dispatches events to service functions |
-| Business logic | `services/inventory/service.py` | Reserve, release, fulfill, restock operations |
-| Repository | `services/inventory/repository.py` | DynamoDB `TransactWriteItems` for atomic stock operations |
+Keeps stock accurate and prevents overselling.
 
-**Handled events:**
-`ProductCreated`, `ProductRestocked`, `OrderCreated`, `OrderCanceled`, `CompensateInventory`, `ShipmentCreated`, `OrderReturned`
+- Reserves, releases, fulfills, and restocks inventory
+- Main files: `services/inventory/handler.py`, `services/inventory/service.py`, `services/inventory/repository.py`
+- Publishes stock-related events such as `LowStock` and `OutOfStock`
 
-**Key features:**
-- **Atomic reservation** — DynamoDB `TransactWriteItems` checks stock availability AND creates reservation in a single transaction
-- **Partial failure rollback** — If item 2 fails, already-reserved item 1 is automatically released
-- **Low-stock alerts** — Publishes `LowStock` / `OutOfStock` events when thresholds are breached
+</details>
 
----
+<details>
+<summary><strong>Shipping Service (Python / Lambda)</strong></summary>
 
-### Shipping Service (Python / Lambda)
+Creates shipments after orders are confirmed.
 
-Creates shipments when orders are confirmed. Idempotent — duplicate `OrderConfirmed` events return the existing shipment.
+- Triggered by `OrderConfirmed`
+- Main files: `services/shipping/handler.py`, `services/shipping/service.py`, `services/shipping/repository.py`
+- Shipment states: `CREATED` -> `SHIPPED` -> `DELIVERED`
 
-| Component | File | Purpose |
-|---|---|---|
-| Event handler | `services/shipping/handler.py` | Processes `OrderConfirmed` events |
-| Business logic | `services/shipping/service.py` | Creates shipment records with tracking numbers |
-| Repository | `services/shipping/repository.py` | DynamoDB CRUD with `orderId-index` GSI |
+</details>
 
-**Shipment lifecycle:** `CREATED` → `SHIPPED` → `DELIVERED`
+<details>
+<summary><strong>Notification Service (Python / Lambda)</strong></summary>
 
-Shipments can also be created and progressed manually by the admin. When a shipment transitions to `SHIPPED`, a `ShipmentCreated` event is published to EventBridge, which triggers the Inventory Service to mark all reservations as `FULFILLED` and reduce the reserved count.
+Sends customer notifications for important order events.
 
----
+- Handles events like `OrderConfirmed`, `ShipmentCreated`, `OrderCanceled`
+- Main file: `services/notification/handler.py`
+- Uses mock email mode by default (`EMAIL_MODE=mock`)
 
-### Notification Service (Python / Lambda)
+</details>
 
-Sends transactional emails for key order lifecycle events.
+<details>
+<summary><strong>Product Service (Go / ECS Fargate)</strong></summary>
 
-| Event | Email |
-|---|---|
-| `OrderConfirmed` | Order confirmation with item details and total |
-| `ShipmentCreated` | Shipping confirmation with tracking number |
-| `OrderCanceled` | Cancellation notice |
+Serves product search and catalog APIs.
 
-Runs in **mock mode** by default (logs email content to CloudWatch). Set `EMAIL_MODE=ses` to send via Amazon SES.
+- APIs: product list, product detail, search, price check, product update
+- Main path: `services/product/`
+- Reads from DynamoDB and S3-backed image metadata
 
----
+</details>
 
-### Product Service (Go / ECS Fargate)
+<details>
+<summary><strong>Cart Service (Go / ECS Fargate + Redis)</strong></summary>
 
-High-throughput product catalog service running as a long-lived container behind an Application Load Balancer.
+Stores user carts and item quantities.
 
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/products/` | GET | Paginated product list (cursor-based) |
-| `/products/{id}` | GET | Single product lookup |
-| `/products/search?q=` | GET | In-memory full-text search (name, brand, category, color) |
-| `/products/pricecheck` | POST | Batch price lookup |
-| `/products/{id}` | PUT | Update product attributes |
+- APIs: create cart, add/update items, read cart, delete/deactivate cart
+- Main path: `services/cart/`
+- Uses Redis for fast cart reads/writes
 
-**Data sources:** DynamoDB (`products` table), S3 (product images), in-memory `sync.Map` cache
-
-**Event integration:**
-- *Publishes:* `ProductCreated`, `ProductRestocked`, `ProductUpdated`
-- *Consumes (via SQS):* `LowStock`, `OutOfStock`, `StockReplenished` — updates in-memory cache
-
----
-
-### Cart Service (Go / ECS Fargate + Redis)
-
-Redis-backed shopping cart service with TTL-based expiry. Runs alongside a Redis sidecar container in the same ECS task.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/cart/:userId` | GET | Fetch user's cart |
-| `/cart/create/:userId` | POST | Create new cart |
-| `/cart/add/:userId` | POST | Add item to cart |
-| `/cart/update/:userId` | PUT | Update item quantity |
-| `/cart/delete/:userId` | PUT | Remove entire cart |
-| `/cart/deactivate/:userId` | PUT | Mark cart inactive |
-| `/cart/:userId/pricecheck` | GET | Verify current prices against Product Service |
+</details>
 
 ---
 
