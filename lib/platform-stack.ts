@@ -239,6 +239,10 @@ export class PlatformStack extends cdk.Stack {
         `arn:aws:dynamodb:${this.region}:${this.account}:table/SagaStateTable/index/*`,
       ],
     }));
+    bffFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
+      resources: ['*'],
+    }));
 
     const orderApiFnArn = ssm.StringParameter.valueForStringParameter(this, '/ecommerce/order-api-fn-arn');
     const orderApiFn = lambda.Function.fromFunctionAttributes(this, 'OrderApiFn', {
@@ -296,6 +300,7 @@ export class PlatformStack extends cdk.Stack {
       // Admin routes
       ['/api/admin/orders',          apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/admin/stats',           apigwv2.HttpMethod.GET,    false, 'bff'],
+      ['/api/admin/observability',   apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/admin/table/{name}',    apigwv2.HttpMethod.GET,    false, 'bff'],
       ['/api/admin/restock',         apigwv2.HttpMethod.POST,   false, 'bff'],
       ['/api/admin/inventory',       apigwv2.HttpMethod.PUT,    false, 'bff'],

@@ -272,6 +272,10 @@ A built-in operations dashboard accessible from the frontend SPA. Visible **only
 
 The **Admin** navigation button in the SPA header is hidden for all regular users. It appears automatically after sign-in when the authenticated email matches `admin@admin.com`. It is hidden again on sign-out.
 
+### 1-Minute Demo (GIF)
+
+![Observability Demo](docs/demo/observability-demo.gif)
+
 ### Tabs
 
 | Tab | Description |
@@ -282,6 +286,7 @@ The **Admin** navigation button in the SPA header is hidden for all regular user
 | **Restock / Manage** | Publish a `ProductRestocked` event to EventBridge with a specific product ID and quantity delta |
 | **Shipments** | Create shipments for CONFIRMED orders, enter tracking numbers, advance status (CREATED → SHIPPED → DELIVERED) |
 | **Event Log** | Reconstructed timeline of saga events from `SagaStateTable` history |
+| **Observability** | EventBridge CloudWatch charts (publish throughput, matched events, triggered rules, invocation failures) with auto-refresh |
 | **DynamoDB Tables** | Raw table browser — scan any of the 7 core tables (Orders, SagaState, Payments, Inventory, Reservations, Shipments, Idempotency) |
 
 ### Shipment Management
@@ -300,6 +305,7 @@ All admin routes are served by the BFF Lambda without a JWT authorizer so they c
 |---|---|---|
 | `GET` | `/api/admin/orders` | List all orders (scans OrdersTable) |
 | `GET` | `/api/admin/stats` | Aggregate counts and revenue totals |
+| `GET` | `/api/admin/observability` | Return CloudWatch-backed EventBridge metric series for charts |
 | `GET` | `/api/admin/table/{name}` | Scan a raw DynamoDB table by logical name |
 | `POST` | `/api/admin/restock` | Publish `ProductRestocked` event to EventBridge |
 | `PUT` | `/api/admin/inventory` | Directly set a product's stock quantity in DynamoDB |
@@ -765,5 +771,3 @@ npx cdk destroy --all
 > **Warning:** This permanently deletes all data including DynamoDB tables and S3 buckets.
 
 ---
-
-

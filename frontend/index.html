@@ -172,6 +172,21 @@
   .event-type.shipping{background:#f3e8ff;color:#6b21a8}
   .event-type.notification{background:#ffe4e6;color:#9f1239}
 
+  /* OBSERVABILITY */
+  .obs-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .obs-toolbar select{padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px}
+  .obs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-bottom:18px}
+  .obs-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .obs-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .obs-value{font-size:24px;font-weight:700;margin-top:4px}
+  .obs-sub{font-size:12px;color:var(--muted);margin-top:4px}
+  .obs-chart-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .obs-chart-title{font-size:15px;font-weight:600;margin-bottom:8px}
+  .obs-legend{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+  .obs-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px}
+  .obs-empty{font-size:13px;color:var(--muted);padding:10px 0}
+  .obs-meta{font-size:12px;color:var(--muted);margin-bottom:10px}
+
   /* TOAST */
   #toast{position:fixed;bottom:24px;right:24px;background:#1a1a18;color:#fff;padding:12px 18px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:999}
   #toast.show{opacity:1}
@@ -204,6 +219,7 @@
   <button class="nav-btn" onclick="showPage('orders')" id="orders-nav" style="display:none">Orders</button>
   <button class="nav-btn" onclick="showPage('profile')" id="profile-nav" style="display:none">Profile</button>
   <button class="nav-btn" onclick="showPage('admin')" id="admin-nav" style="display:none">Admin</button>
+  <button class="nav-btn" onclick="showPage('observability')" id="obs-nav" style="display:none">Observability</button>
   <button class="nav-btn btn-primary btn-sm" id="auth-btn" onclick="openAuth()" style="background:var(--accent);color:#fff;padding:6px 14px;border-radius:var(--radius)">Sign in</button>
   <button class="nav-btn" id="signout-btn" onclick="signOut()" style="display:none">Sign out</button>
 </nav>
@@ -490,6 +506,35 @@
   </div>
 </div>
 
+<!-- OBSERVABILITY PAGE -->
+<div id="page-observability" class="page">
+  <div class="page-header">
+    <h1>EventBridge Observability</h1>
+    <div class="obs-toolbar">
+      <select id="obs-window" onchange="loadObservability()">
+        <option value="60">Last 1 hour</option>
+        <option value="180" selected>Last 3 hours</option>
+        <option value="360">Last 6 hours</option>
+        <option value="720">Last 12 hours</option>
+        <option value="1440">Last 24 hours</option>
+      </select>
+      <select id="obs-period" onchange="loadObservability()">
+        <option value="60">1-min buckets</option>
+        <option value="300" selected>5-min buckets</option>
+        <option value="900">15-min buckets</option>
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="loadObservability()">Refresh</button>
+      <a id="obs-cloudwatch-link" class="btn btn-ghost btn-sm" target="_blank" rel="noopener">Open CloudWatch</a>
+    </div>
+  </div>
+  <p class="page-sub">Live EventBridge charts from Amazon CloudWatch metrics</p>
+  <div id="obs-meta" class="obs-meta">Loading metrics...</div>
+  <div id="obs-kpis" class="obs-grid"></div>
+  <div id="obs-chart-publish" class="obs-chart-card"></div>
+  <div id="obs-chart-routing" class="obs-chart-card"></div>
+  <div id="obs-chart-rules" class="obs-chart-card"></div>
+</div>
+
 <!-- AUTH MODAL -->
 <div class="modal-backdrop" id="auth-modal">
   <div class="modal">
@@ -569,6 +614,7 @@ function showPage(page) {
   if (page === "orders")  loadOrders();
   if (page === "profile") loadProfile();
   if (page === "admin")   loadAdmin();
+  if (page === "observability") loadObservability();
 }
 
 // ── PRODUCTS ──────────────────────────────────────────────────────────────────
@@ -1246,6 +1292,7 @@ async function onSignedIn({ claims, idToken, accessToken }) {
   document.getElementById("orders-nav").style.display  = "";
   document.getElementById("profile-nav").style.display = "";
   document.getElementById("admin-nav").style.display   = claims.email === "admin@admin.com" ? "" : "none";
+  document.getElementById("obs-nav").style.display     = claims.email === "admin@admin.com" ? "" : "none";
 
   // Load persisted cart from Go cart service, then merge any pre-login items
   const userId = claims.sub;
@@ -1295,6 +1342,7 @@ function signOut() {
   document.getElementById("orders-nav").style.display  = "none";
   document.getElementById("profile-nav").style.display = "none";
   document.getElementById("admin-nav").style.display   = "none";
+  document.getElementById("obs-nav").style.display     = "none";
   showPage("products");
   toast("Signed out");
 }
@@ -1348,6 +1396,153 @@ function toast(msg) {
   el.textContent = msg; el.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
+}
+
+// ── OBSERVABILITY ─────────────────────────────────────────────────────────────
+let observabilityTimer = null;
+
+function formatObsNumber(value) {
+  return Number(value || 0).toLocaleString("en-US");
+}
+
+function obsSeries(data, key) {
+  return data?.series?.[key] || null;
+}
+
+function buildCloudWatchMetricsUrl(eventBusName) {
+  const region = CONFIG.region;
+  const encodedBus = encodeURIComponent(eventBusName || "ecommerce-event-bus");
+  return `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#metricsV2:namespace=AWS/Events;dimensions=EventBusName;search=${encodedBus}`;
+}
+
+async function loadObservability(silent = false) {
+  const page = document.getElementById("page-observability");
+  if (!page) return;
+  const meta = document.getElementById("obs-meta");
+  const windowMinutes = document.getElementById("obs-window").value || "180";
+  const periodSeconds = document.getElementById("obs-period").value || "300";
+
+  if (!silent) {
+    meta.textContent = "Loading EventBridge metrics from CloudWatch...";
+  }
+
+  try {
+    const data = await apiCall("GET", `/api/admin/observability?windowMinutes=${windowMinutes}&periodSeconds=${periodSeconds}`);
+    renderObservability(data);
+  } catch {
+    meta.textContent = "Unable to load CloudWatch metrics right now.";
+    document.getElementById("obs-kpis").innerHTML = "";
+    document.getElementById("obs-chart-publish").innerHTML = '<div class="obs-empty">No chart data available.</div>';
+    document.getElementById("obs-chart-routing").innerHTML = '<div class="obs-empty">No chart data available.</div>';
+    document.getElementById("obs-chart-rules").innerHTML = '<div class="obs-empty">No chart data available.</div>';
+  }
+
+  clearInterval(observabilityTimer);
+  observabilityTimer = setInterval(() => {
+    if (!document.getElementById("page-observability").classList.contains("active")) {
+      clearInterval(observabilityTimer);
+      return;
+    }
+    loadObservability(true);
+  }, 30000);
+}
+
+function renderObservability(data) {
+  const eventBusName = data.eventBusName || "ecommerce-event-bus";
+  const generatedAt = data.generatedAt ? new Date(data.generatedAt) : new Date();
+  const updated = generatedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const availableCount = (data.availableMetricNames || []).length;
+  const summary = data.summary || {};
+
+  document.getElementById("obs-meta").textContent =
+    `Bus: ${eventBusName} • Window: ${data.windowMinutes}m • Bucket: ${data.periodSeconds}s • Updated: ${updated} • Metrics found: ${availableCount}`;
+  document.getElementById("obs-cloudwatch-link").href = buildCloudWatchMetricsUrl(eventBusName);
+
+  const cards = [
+    { label: "Published", value: formatObsNumber(summary.publishSuccess), sub: "PutEvents success count" },
+    { label: "Publish Failures", value: formatObsNumber(summary.publishFailed), sub: `${Number(summary.publishFailureRatePct || 0).toFixed(2)}% failure rate` },
+    { label: "Matched Events", value: formatObsNumber(summary.matchedEvents), sub: "EventBridge rule matching" },
+    { label: "Triggered Rules", value: formatObsNumber(summary.triggeredRules), sub: "Rules triggered by events" },
+    { label: "Target Invocations", value: formatObsNumber(summary.invocations), sub: "Event targets invoked" },
+    { label: "Failed Invocations", value: formatObsNumber(summary.failedInvocations), sub: `${Number(summary.invocationFailureRatePct || 0).toFixed(2)}% invocation failure rate` },
+  ];
+
+  document.getElementById("obs-kpis").innerHTML = cards.map(card => `
+    <div class="obs-card">
+      <div class="obs-label">${card.label}</div>
+      <div class="obs-value">${card.value}</div>
+      <div class="obs-sub">${card.sub}</div>
+    </div>
+  `).join("");
+
+  renderObsChart("obs-chart-publish", "Event Publishing", "Per-period EventBridge publish activity", [
+    obsSeries(data, "putSuccess"),
+    obsSeries(data, "putFailed"),
+    obsSeries(data, "putCalls"),
+  ]);
+  renderObsChart("obs-chart-routing", "Routing & Delivery", "How events route and deliver to targets", [
+    obsSeries(data, "matchedEvents"),
+    obsSeries(data, "invocations"),
+    obsSeries(data, "failedInvocations"),
+  ]);
+  renderObsChart("obs-chart-rules", "Rule Execution", "Triggered rules over time", [
+    obsSeries(data, "triggeredRules"),
+  ]);
+}
+
+function renderObsChart(containerId, title, subtitle, seriesList) {
+  const el = document.getElementById(containerId);
+  const active = (seriesList || []).filter(s => s && Array.isArray(s.points) && s.points.length);
+  if (!active.length) {
+    el.innerHTML = `<div class="obs-chart-title">${title}</div><div class="obs-empty">No CloudWatch datapoints in the selected range.</div>`;
+    return;
+  }
+
+  const width = 920;
+  const height = 240;
+  const pad = 28;
+  const chartHeight = height - (pad * 2);
+  const chartWidth = width - (pad * 2);
+  const maxY = Math.max(1, ...active.flatMap(s => s.points.map(p => Number(p.value) || 0)));
+
+  const grid = [0, 1, 2, 3, 4].map(i => {
+    const y = pad + (chartHeight * i / 4);
+    const value = ((4 - i) / 4) * maxY;
+    return `<line x1="${pad}" y1="${y}" x2="${width - pad}" y2="${y}" stroke="#eceae2" stroke-width="1"/>
+      <text x="4" y="${y + 4}" fill="#8a8a83" font-size="11">${Math.round(value)}</text>`;
+  }).join("");
+
+  const lines = active.map(s => {
+    const denom = Math.max(s.points.length - 1, 1);
+    const points = s.points.map((point, idx) => {
+      const x = pad + (chartWidth * idx / denom);
+      const y = (height - pad) - ((Number(point.value) || 0) / maxY * chartHeight);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    }).join(" ");
+    return `<polyline fill="none" stroke="${s.color}" stroke-width="2.5" vector-effect="non-scaling-stroke" points="${points}"/>`;
+  }).join("");
+
+  const allTimes = active.flatMap(s => s.points.map(p => Date.parse(p.timestamp))).filter(n => Number.isFinite(n));
+  const minTs = allTimes.length ? new Date(Math.min(...allTimes)) : null;
+  const maxTs = allTimes.length ? new Date(Math.max(...allTimes)) : null;
+  const startLabel = minTs ? minTs.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "—";
+  const endLabel = maxTs ? maxTs.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "—";
+
+  const legend = active.map(s => `
+    <span><span class="obs-dot" style="background:${s.color}"></span>${s.label} (${formatObsNumber(s.total)})</span>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="obs-chart-title">${title}</div>
+    <div class="obs-sub">${subtitle}</div>
+    <svg viewBox="0 0 ${width} ${height}" width="100%" height="240" role="img" aria-label="${title}">
+      ${grid}
+      ${lines}
+      <text x="${pad}" y="${height - 6}" fill="#8a8a83" font-size="11">${startLabel}</text>
+      <text x="${width - 88}" y="${height - 6}" fill="#8a8a83" font-size="11">${endLabel}</text>
+    </svg>
+    <div class="obs-legend">${legend}</div>
+  `;
 }
 
 // ── ADMIN DASHBOARD ──────────────────────────────────────────────────────
@@ -1530,11 +1725,12 @@ function renderAdminShipments() {
   const sorted = [...shipments].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   body.innerHTML = sorted.map(s => {
     const date = s.createdAt ? new Date(s.createdAt).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }) : "—";
-    const statusColor = s.status === 'DELIVERED' ? '#16a34a' : s.status === 'SHIPPED' || s.status === 'IN_TRANSIT' ? '#2563eb' : '#d97706';
+    const statusColor = s.status === 'DELIVERED' ? '#16a34a' : s.status === 'CANCELLED' ? '#6b7280' : s.status === 'SHIPPED' || s.status === 'IN_TRANSIT' ? '#2563eb' : '#d97706';
     const nextStatuses = [];
     if (s.status === 'LABEL_CREATED') nextStatuses.push('SHIPPED', 'IN_TRANSIT');
     if (s.status === 'SHIPPED') nextStatuses.push('IN_TRANSIT', 'DELIVERED');
     if (s.status === 'IN_TRANSIT') nextStatuses.push('DELIVERED');
+    const canCancel = s.status !== 'DELIVERED' && s.status !== 'CANCELLED';
     return `<tr>
       <td style="font-family:monospace;font-size:12px">${s.shipmentId}</td>
       <td style="font-family:monospace;font-size:12px" title="${s.orderId}">${(s.orderId||'').slice(0,12)}…</td>
@@ -1542,9 +1738,9 @@ function renderAdminShipments() {
       <td style="font-weight:500">${s.trackingNumber || '—'}</td>
       <td><span style="font-weight:600;color:${statusColor}">${s.status}</span></td>
       <td style="font-size:12px;white-space:nowrap">${date}</td>
-      <td style="display:flex;gap:4px">${nextStatuses.map(ns =>
+      <td style="display:flex;gap:4px;flex-wrap:wrap">${nextStatuses.map(ns =>
         `<button class="btn btn-ghost btn-sm" onclick="updateShipmentStatus('${s.shipmentId}','${ns}')">${ns}</button>`
-      ).join("")}</td>
+      ).join("")}${canCancel ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="cancelShipment('${s.shipmentId}','${s.orderId}')">Cancel</button>` : ''}</td>
     </tr>`;
   }).join("");
 }
@@ -1572,6 +1768,16 @@ async function updateShipmentStatus(shipmentId, newStatus) {
     toast(`Shipment ${shipmentId.slice(0,8)} updated to ${newStatus}`);
     setTimeout(() => loadAdmin(), 1000);
   } catch { toast("Update failed"); }
+}
+
+async function cancelShipment(shipmentId, orderId) {
+  const msg = `Cancel shipment ${shipmentId.slice(0,8)}?\n\nNote: if this order was already marked SHIPPED, inventory reservations were already fulfilled (reserved count reduced). You may need to manually restock the affected products via the Restock / Manage tab.`;
+  if (!confirm(msg)) return;
+  try {
+    await apiCall("PUT", "/api/admin/shipment", { shipmentId, status: "CANCELLED" });
+    toast(`Shipment ${shipmentId.slice(0,8)} cancelled. Check Restock tab if inventory needs adjustment.`);
+    setTimeout(() => loadAdmin(), 1000);
+  } catch { toast("Cancel failed"); }
 }
 
 function switchAdminTab(tab, btn) {

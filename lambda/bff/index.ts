@@ -13,6 +13,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, ScanCommand, UpdateCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import { CloudWatchClient, GetMetricDataCommand, ListMetricsCommand } from '@aws-sdk/client-cloudwatch';
 
 const EVENT_BUS_NAME = process.env.EVENT_BUS_NAME!;
 const ORDER_API_FN_NAME = process.env.ORDER_API_FN_NAME;
@@ -26,6 +27,24 @@ const RESERVATIONS_TABLE  = process.env.RESERVATIONS_TABLE || 'ReservationsTable
 const eb          = new EventBridgeClient({});
 const lambdaClient = new LambdaClient({});
 const dynamo       = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const cloudWatch   = new CloudWatchClient({});
+
+const EVENTBRIDGE_METRICS = [
+  { key: 'putSuccess',        metricName: 'PutEventsApproximateSuccessCount', label: 'Published (Success)', color: '#16a34a' },
+  { key: 'putFailed',         metricName: 'PutEventsApproximateFailedCount',  label: 'Published (Failed)',  color: '#dc2626' },
+  { key: 'putCalls',          metricName: 'PutEventsApproximateCallCount',    label: 'Publish API Calls',   color: '#2563eb' },
+  { key: 'matchedEvents',     metricName: 'MatchedEvents',                     label: 'Matched Events',      color: '#8b5cf6' },
+  { key: 'invocations',       metricName: 'Invocations',                       label: 'Target Invocations',  color: '#f59e0b' },
+  { key: 'failedInvocations', metricName: 'FailedInvocations',                 label: 'Failed Invocations',  color: '#ef4444' },
+  { key: 'triggeredRules',    metricName: 'TriggeredRules',                    label: 'Triggered Rules',     color: '#06b6d4' },
+] as const;
+
+type EventBridgeMetricKey = (typeof EVENTBRIDGE_METRICS)[number]['key'];
+
+interface MetricPoint {
+  timestamp: string;
+  value: number;
+}
 
 interface ApiEvent {
   routeKey: string;
@@ -41,6 +60,11 @@ const err = (status: number, msg: string, cid = '') => ({ statusCode: status, he
 const getCid = (e: ApiEvent) => e.headers?.['x-correlation-id'] ?? e.headers?.['X-Correlation-Id'] ?? crypto.randomUUID();
 const getUid = (e: ApiEvent) => e.requestContext?.authorizer?.jwt?.claims?.['sub'];
 const getBody = (e: ApiEvent) => { try { return e.body ? JSON.parse(e.body) : {}; } catch { return null; } };
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const parsePositiveInt = (value: string | undefined, fallback: number) => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 async function getInventory(correlationId: string) {
   const stock: Record<string, number> = {};
@@ -279,6 +303,149 @@ async function adminStats(correlationId: string) {
   }, correlationId);
 }
 
+async function listEventBridgeMetricNames(): Promise<string[]> {
+  const metricNames = new Set<string>();
+  let nextToken: string | undefined;
+  do {
+    const res = await cloudWatch.send(new ListMetricsCommand({
+      Namespace: 'AWS/Events',
+      Dimensions: [{ Name: 'EventBusName', Value: EVENT_BUS_NAME }],
+      NextToken: nextToken,
+    }));
+    for (const metric of res.Metrics ?? []) {
+      if (metric.MetricName) metricNames.add(metric.MetricName);
+    }
+    nextToken = res.NextToken;
+  } while (nextToken);
+  return [...metricNames].sort();
+}
+
+function summarizePoints(points: MetricPoint[]) {
+  const total = points.reduce((sum, point) => sum + point.value, 0);
+  const max = points.reduce((peak, point) => Math.max(peak, point.value), 0);
+  const latest = points.length ? points[points.length - 1].value : 0;
+  return { total, max, latest };
+}
+
+async function adminObservability(qs: Record<string, string>, correlationId: string) {
+  const windowMinutes = clamp(parsePositiveInt(qs.windowMinutes, 180), 30, 1440);
+  const periodSeconds = clamp(parsePositiveInt(qs.periodSeconds, windowMinutes <= 240 ? 60 : 300), 60, 3600);
+  const endTime = new Date();
+  const startTime = new Date(endTime.getTime() - windowMinutes * 60 * 1000);
+
+  let availableMetricNames: string[] = [];
+  try {
+    availableMetricNames = await listEventBridgeMetricNames();
+  } catch {
+    // Metrics can still be queried even when ListMetrics has no recent datapoints.
+  }
+
+  const metricQueries = EVENTBRIDGE_METRICS.map((def, idx) => ({
+    Id: `m${idx + 1}`,
+    Label: def.label,
+    ReturnData: true,
+    MetricStat: {
+      Metric: {
+        Namespace: 'AWS/Events',
+        MetricName: def.metricName,
+        Dimensions: [{ Name: 'EventBusName', Value: EVENT_BUS_NAME }],
+      },
+      Period: periodSeconds,
+      Stat: 'Sum',
+    },
+  }));
+
+  const rawResults: Record<string, { timestamps: Date[]; values: number[] }> = {};
+  for (const query of metricQueries) rawResults[query.Id] = { timestamps: [], values: [] };
+
+  let nextToken: string | undefined;
+  do {
+    const res = await cloudWatch.send(new GetMetricDataCommand({
+      StartTime: startTime,
+      EndTime: endTime,
+      MetricDataQueries: metricQueries,
+      ScanBy: 'TimestampAscending',
+      NextToken: nextToken,
+    }));
+
+    for (const item of res.MetricDataResults ?? []) {
+      if (!item.Id || !rawResults[item.Id]) continue;
+      rawResults[item.Id].timestamps.push(...(item.Timestamps ?? []));
+      rawResults[item.Id].values.push(...(item.Values ?? []));
+    }
+    nextToken = res.NextToken;
+  } while (nextToken);
+
+  const series: Record<EventBridgeMetricKey, {
+    key: EventBridgeMetricKey;
+    metricName: string;
+    label: string;
+    color: string;
+    points: MetricPoint[];
+    total: number;
+    max: number;
+    latest: number;
+  }> = {} as Record<EventBridgeMetricKey, {
+    key: EventBridgeMetricKey;
+    metricName: string;
+    label: string;
+    color: string;
+    points: MetricPoint[];
+    total: number;
+    max: number;
+    latest: number;
+  }>;
+
+  for (let idx = 0; idx < EVENTBRIDGE_METRICS.length; idx++) {
+    const def = EVENTBRIDGE_METRICS[idx];
+    const queryId = `m${idx + 1}`;
+    const { timestamps, values } = rawResults[queryId];
+    const points: MetricPoint[] = timestamps
+      .map((timestamp, i) => ({
+        timestamp: timestamp.toISOString(),
+        value: Number(values[i] ?? 0),
+      }))
+      .filter((p) => Number.isFinite(p.value))
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+    const summary = summarizePoints(points);
+    series[def.key] = {
+      key: def.key,
+      metricName: def.metricName,
+      label: def.label,
+      color: def.color,
+      points,
+      ...summary,
+    };
+  }
+
+  const publishSuccess = series.putSuccess.total;
+  const publishFailed = series.putFailed.total;
+  const publishCalls = series.putCalls.total || (publishSuccess + publishFailed);
+  const invocationCount = series.invocations.total;
+  const failedInvocations = series.failedInvocations.total;
+
+  return ok({
+    eventBusName: EVENT_BUS_NAME,
+    generatedAt: endTime.toISOString(),
+    windowMinutes,
+    periodSeconds,
+    availableMetricNames,
+    summary: {
+      publishSuccess,
+      publishFailed,
+      publishCalls,
+      matchedEvents: series.matchedEvents.total,
+      triggeredRules: series.triggeredRules.total,
+      invocations: invocationCount,
+      failedInvocations,
+      publishFailureRatePct: publishCalls > 0 ? Number(((publishFailed / publishCalls) * 100).toFixed(2)) : 0,
+      invocationFailureRatePct: invocationCount > 0 ? Number(((failedInvocations / invocationCount) * 100).toFixed(2)) : 0,
+    },
+    series,
+  }, correlationId);
+}
+
 // ── Shipment management ──────────────────────────────────────────────────────
 
 async function adminCreateShipment(payload: Record<string, unknown>, correlationId: string) {
@@ -412,6 +579,8 @@ export const handler = async (event: ApiEvent): Promise<unknown> => {
       return adminListOrders(correlationId);
     case 'GET /api/admin/stats':
       return adminStats(correlationId);
+    case 'GET /api/admin/observability':
+      return adminObservability(qs, correlationId);
     case 'GET /api/admin/table/{name}':
       return adminScanTable(params.name ?? '', correlationId);
     case 'POST /api/admin/restock':
